@@ -6,7 +6,7 @@
 // On Windows, OS notifications from an uninstalled development application
 // work reliably when deno.exe is launched from a target/debug directory.
 
-import { Tauriless } from "npm:@mefistofelix/tauriless@0.1.2";
+import { Tauriless } from "npm:@mefistofelix/tauriless@0.1.3";
 
 const WINDOW_LABEL = "main";
 const TRAY_ID = "tauriless-deno-npm-tray";
