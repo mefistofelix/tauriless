@@ -1,0 +1,6 @@
+"$schema" = "schemas/schema.json"
+
+[[permission]]
+identifier = "allow-bridge"
+description = "Allows a webview to forward an event to the embedding host"
+commands.allow = ["tauriless:event"]

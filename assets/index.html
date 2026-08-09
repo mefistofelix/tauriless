@@ -1,0 +1,21 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tauriless</title>
+</head>
+<body>
+  <script>
+    // A host can keep an entire test page in its own source and pass it in the
+    // fragment of this app URL. document.write preserves the valid Tauri app
+    // origin, unlike navigating WebView2 directly to a data: URL.
+    if (location.hash.length > 1) {
+      const html = decodeURIComponent(location.hash.slice(1));
+      history.replaceState(null, '', location.pathname);
+      document.open();
+      document.write(html);
+      document.close();
+    }
+  </script>
+</body>
+</html>
