@@ -18,7 +18,7 @@ int main(void) {
   const char *json =
       "{\"id\":1,\"cmd\":\"plugin:webview|create_webview_window\","
       "\"payload\":{\"options\":{\"label\":\"smoke\","
-      "\"title\":\"Smoke\",\"url\":\"index.html\","
+      "\"title\":\"Smoke\",\"url\":\"data:text/html,smoke\","
       "\"visible\":false}}}";
   status = tauriless_send(runtime, json);
   if (status != TAURILESS_OK) return report_error("create webview", status);

@@ -87,6 +87,61 @@ is used; with several, `main` is preferred. If several exist and none is named
 `method`, `params`, and `target` are accepted as aliases for `cmd`, `payload`,
 and `webview`.
 
+### Host-provided local assets
+
+Tauriless registers Tauri's public asynchronous URI protocol hook under the
+standard `tauri` scheme. This replaces only the compile-time asset resolver: a
+page still has Tauri's normal local origin (`tauri://localhost` on macOS/Linux,
+`http://tauri.localhost` on Windows), standard IPC initialization, and ACL.
+No Tauri or WRY source is patched.
+
+When a webview requests `index.html`, CSS, JavaScript, an image, or another
+local asset, `drain()` returns:
+
+```json
+{
+  "kind": "asset-request",
+  "requestId": 12,
+  "webview": "main",
+  "method": "GET",
+  "url": "tauri://localhost/",
+  "headers": {}
+}
+```
+
+The host answers through the existing `send()` function. It may provide a local
+file path, which Rust reads as bytes, or inline UTF-8 content:
+
+```json
+{
+  "id": 2,
+  "cmd": "tauriless:asset-response",
+  "payload": {
+    "requestId": 12,
+    "path": "C:\\my-app\\index.html"
+  }
+}
+```
+
+```json
+{
+  "id": 3,
+  "cmd": "tauriless:asset-response",
+  "payload": {
+    "requestId": 13,
+    "content": "body { color: white; }",
+    "mime": "text/css; charset=utf-8"
+  }
+}
+```
+
+`status` defaults to 200 and `headers` defaults to empty. Content type precedence
+is an explicit `Content-Type` header, then `mime`, then the local path extension,
+then the requested URL extension, and finally `application/octet-stream`.
+`content` takes precedence when both `content` and `path` are present. Unknown
+paths can be answered with `status: 404` and a short `content` body. The response
+command receives its normal result through a later drain.
+
 Persistent callbacks use Tauri's normal `Channel<T>` payload. The bridge
 intercepts every already serialized channel delivery before it reaches
 JavaScript:
@@ -125,22 +180,43 @@ their upstream event names and payloads:
 Because Tauri's listener API has no wildcard event name, Tauriless registers all
 16 named core events exposed by the pinned Tauri version: resize, move, close,
 destroy, focus, blur, scale, theme, window/webview creation, drag enter/over/drop/
-leave, suspend, and resume. Menu, tray, and plugin callback channels use dynamic
-IDs instead of event names and are already covered generically by the global
-`Channel<T>` interceptor. The bundled notification, opener, and OS plugins do
-not define additional named Rust events in their pinned versions.
+leave, suspend, and resume. It also registers every exact event name emitted on
+Tauri's Rust event bus by the current official `plugins-workspace` v2 audit:
+`deep-link://new-url`, `log://log`, and `store://change`. Menu, tray, and most
+plugin callbacks use dynamic `Channel<T>` IDs instead of event names and are
+already covered generically by the global `Channel<T>` interceptor.
 `tauri://created` and `tauri://error` are local JavaScript constructor signals,
 not emissions on Tauri's Rust event bus, so they are intentionally not listed.
 
-The pinned plugin audit is:
+The audit distinguishes transport coverage from plugin availability. The core
+plugins and notification, opener, OS, positioner, and store are
+initialized in this binary.
+The other official plugins listed below are not automatically compiled merely by
+registering their event names; adding one still requires its Rust crate and
+Tauri builder initialization.
 
-| Tauri plugin | Asynchronous output handled by Tauriless |
+The pinned asynchronous-output audit is:
+
+| Tauri surface | Native asynchronous output handled by Tauriless |
 | --- | --- |
-| `core:window`, `core:webview` | All 16 statically named core events above |
-| `core:menu`, `core:tray` | Dynamic `Channel<T>` IDs, caught without a name list |
-| `core:event` | Arbitrary application-defined names; Tauriless explicitly registers `tauriless://webview-message` |
-| `core:app`, `core:image`, `core:path`, `core:resources` | No additional named asynchronous output on desktop |
-| notification, opener, OS | No additional named Rust events in the pinned plugin versions |
+| `window`, `webview`, `webviewWindow` | All 16 statically named `tauri://` core events above |
+| `menu`, `tray` | Dynamic `Channel<T>` IDs, caught without a name list |
+| `event` | Arbitrary application-defined names cannot be wildcard-listened through Tauri's public API; Tauriless explicitly registers `tauriless://webview-message` |
+| `app`, `core`, `dpi`, `image`, `path` | No additional named asynchronous event output |
+| `mocks` | JavaScript test helpers only; no native runtime output |
+| deep-link, log, store | Exact Rust event-bus names registered: `deep-link://new-url`, `log://log`, `store://change` |
+| fs, global-shortcut, shell, updater, upload, websocket | Dynamic `Channel<T>` output, caught generically if that plugin is later installed |
+| notification | Desktop commands have no named Rust event. Its `notification` and `actionPerformed` plugin listeners are mobile-only and unsupported here |
+| autostart, cli, clipboard-manager, dialog, http, opener, OS, positioner, process, SQL, stronghold, window-state | No additional named Rust event-bus output |
+| barcode-scanner, biometric, haptics, nfc | Mobile functionality; unsupported by Tauriless |
+| geolocation | Its watch API is channel-shaped, but the official desktop implementation currently returns defaults and does not produce watch updates; not installed |
+
+This inventory covers every plugin directory in the official
+[`plugins-workspace` v2](https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins)
+snapshot audited for this release. A plugin may expose commands or Rust callback
+builders without emitting a named event; those are not missing event names.
+Tauriless targets x86-64 Windows, macOS, and Linux only; Android and iOS plugin
+implementations and their plugin-listener events are intentionally excluded.
 
 There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
@@ -174,13 +250,13 @@ described in
 ## Deno FFI end-to-end demo
 
 [`examples/deno_ffi_demo.js`](examples/deno_ffi_demo.js) is a single-file,
-repeatable manual test. It contains the complete HTML document and passes it in
-the fragment of the built-in app URL to the generic
-`tauriless/assets/index.html` loader; it uses no web server, separate demo page,
-or external JavaScript dependencies. Keeping a real app URL is important on
-WebView2 because WRY 0.55.1 cannot parse the empty IPC source reported for a
-top-level `data:` document. The demo creates the real webview through
-`tauriless_send`, then creates its menu and tray through the same generic path.
+repeatable manual test. It contains the complete HTML document, writes it to one
+temporary file, and returns that path when Rust emits the initial asset request;
+it uses no web server, separate source file, fragment loader, or external
+JavaScript dependencies. A second CSS request is answered with inline `content`
+and an explicit `mime`, so both response forms are exercised. The demo creates
+the real webview through `tauriless_send`, then creates its menu and tray through
+the same generic path.
 
 From the workspace root, build the DLL, copy the supplied Deno executable beside
 the debug DLL, and run the demo:
@@ -188,7 +264,7 @@ the debug DLL, and run the demo:
 ```powershell
 cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
 Copy-Item -LiteralPath .\deno.exe -Destination .\tauriless\target\debug\deno.exe -Force
-.\tauriless\target\debug\deno.exe run --allow-ffi .\examples\deno_ffi_demo.js
+.\tauriless\target\debug\deno.exe run --allow-ffi --allow-write .\examples\deno_ffi_demo.js
 ```
 
 The debug-directory copy is intentional: the upstream notification plugin
@@ -207,7 +283,7 @@ example's `setHtml()` helper to update a DOM subtree. Tauri exposes neither
 command or Tauri patch is introduced.
 
 ```powershell
-.\deno.exe run --allow-ffi .\examples\deno_npm_demo.js
+.\deno.exe run --allow-ffi --allow-write .\examples\deno_npm_demo.js
 ```
 
 ## npm package and cross-platform release
@@ -376,6 +452,159 @@ the Cargo version. ARM and musl are not release targets, and Linux consumers
 still need Tauri's GTK/WebKitGTK runtime libraries. No npmjs account, npm token,
 or repository secret is required for publishing.
 
+## Python ctypes and asyncio example
+
+Python uses the same five C functions through the standard `ctypes` module.
+Set `TAURILESS_LIBRARY_PATH` to the downloaded native library. The optional
+`TAURILESS_INDEX_HTML` points at a local file for the initial document; without
+it, the example returns inline HTML instead.
+
+```python
+import asyncio
+import contextlib
+import ctypes
+import itertools
+import json
+import os
+
+lib = ctypes.CDLL(os.environ["TAURILESS_LIBRARY_PATH"])
+handle = ctypes.c_void_p()
+
+lib.tauriless_create.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+lib.tauriless_create.restype = ctypes.c_int32
+lib.tauriless_send.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+lib.tauriless_send.restype = ctypes.c_int32
+lib.tauriless_drain.argtypes = [ctypes.c_void_p]
+lib.tauriless_drain.restype = ctypes.c_void_p
+lib.tauriless_destroy.argtypes = [ctypes.c_void_p]
+lib.tauriless_destroy.restype = ctypes.c_int32
+lib.tauriless_last_error.argtypes = []
+lib.tauriless_last_error.restype = ctypes.c_void_p
+
+
+def last_error():
+    pointer = lib.tauriless_last_error()
+    return ctypes.string_at(pointer).decode("utf-8") if pointer else ""
+
+
+def check(status, operation):
+    if status != 0:
+        raise RuntimeError(f"{operation} failed ({status}): {last_error()}")
+
+
+check(lib.tauriless_create(ctypes.byref(handle)), "create")
+next_id = itertools.count(1)
+pending = {}
+
+
+def send(request):
+    encoded = json.dumps(
+        request, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    check(lib.tauriless_send(handle, encoded), "send")
+
+
+def request(command, payload=None, webview=None):
+    request_id = next(next_id)
+    message = {"id": request_id, "cmd": command, "payload": payload or {}}
+    if webview is not None:
+        message["webview"] = webview
+
+    future = asyncio.get_running_loop().create_future()
+    pending[request_id] = future
+    try:
+        send(message)
+    except BaseException as error:
+        pending.pop(request_id, None)
+        future.set_exception(error)
+    return future
+
+
+def report_background(future):
+    if not future.cancelled() and future.exception() is not None:
+        print("background request failed:", future.exception())
+
+
+def handle_message(message):
+    if message["kind"] == "result":
+        future = pending.pop(message["id"], None)
+        if future is None:
+            return
+        if message["ok"]:
+            future.set_result(message.get("value"))
+        else:
+            future.set_exception(RuntimeError(str(message.get("error"))))
+    elif message["kind"] == "asset-request":
+        index_path = os.environ.get("TAURILESS_INDEX_HTML")
+        payload = {"requestId": message["requestId"]}
+        is_document = message["url"].endswith(("/", "/index.html"))
+        if not is_document:
+            payload.update({
+                "status": 404,
+                "content": "not found",
+                "mime": "text/plain; charset=utf-8",
+            })
+        elif index_path:
+            payload["path"] = os.path.abspath(index_path)
+        else:
+            payload.update({
+                "content": "<!doctype html><h1>Tauriless + asyncio</h1>",
+                "mime": "text/html; charset=utf-8",
+            })
+
+        # Do not await inside the drain handler: this result needs a later drain.
+        request("tauriless:asset-response", payload).add_done_callback(
+            report_background
+        )
+    else:
+        print(json.dumps(message, ensure_ascii=False))
+
+
+def drain_once():
+    pointer = lib.tauriless_drain(handle)
+    if not pointer:
+        raise RuntimeError(f"drain failed: {last_error()}")
+    # Copy and decode Rust's borrowed string before the next drain.
+    batch = json.loads(ctypes.string_at(pointer).decode("utf-8"))
+    for message in batch.get("messages", []):
+        handle_message(message)
+
+
+async def pump():
+    while True:
+        drain_once()                       # exactly one non-blocking GUI iteration
+        await asyncio.sleep(0.016)         # yield to asyncio's main-thread loop
+
+
+async def main():
+    pump_task = asyncio.create_task(pump())
+    try:
+        await request(
+            "plugin:webview|create_webview_window",
+            {"options": {
+                "label": "main",
+                "title": "Tauriless + Python",
+                "url": "index.html",
+                "visible": True,
+            }},
+        )
+        await asyncio.Event().wait()       # application work continues here
+    finally:
+        pump_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await pump_task
+        check(lib.tauriless_destroy(handle), "destroy")
+
+
+asyncio.run(main())
+```
+
+`ctypes.string_at()` performs the required synchronous copy of the borrowed
+drain buffer. Do not call Tauriless through `asyncio.to_thread()` or an executor:
+creation, send, drain, and destruction of one runtime must all remain on the
+main OS thread. `asyncio.sleep()` only suspends the coroutine, so the rest of the
+Python event loop continues to run between GUI iterations.
+
 ## Code running in a webview
 
 Tauriless injects no JavaScript. Code in a webview uses the standard Tauri IPC
@@ -392,11 +621,30 @@ them. Tauriless neither replaces `__TAURI_INTERNALS__` nor mirrors those APIs.
 
 ## Included Tauri functionality
 
-The build keeps Tauri's built-in app, event, image, menu, path, resource, tray,
-webview, and window plugins. It additionally initializes the official
-notification, opener, and OS plugins. Native window and webview events are
-forwarded from Tauri's Rust event bus; menu, tray, and other persistent plugin
-callbacks use Tauri's existing channel serialization.
+The package name `@tauri-apps/api` refers to the upstream JavaScript client and
+is not copied into the Tauriless npm package. A page may bundle that client or
+call `window.__TAURI_INTERNALS__` directly; the native surfaces available to it
+are listed here.
+
+| JavaScript module | Included now | Notes |
+| --- | --- | --- |
+| `@tauri-apps/api` | Client not bundled | Its standard IPC works for native modules present below; Tauriless does not reimplement it |
+| app, core, event, image, menu, path, tray, webview, window | Yes | Built-in Tauri core plugins |
+| webviewWindow | Yes, as a JS facade | Composes the built-in window and webview APIs; it is not a separate Rust plugin |
+| dpi | No native plugin needed | JavaScript data classes/types used by window APIs |
+| mocks | No native plugin | JavaScript-only test helpers |
+| notification, opener, OS, positioner, store | Yes | Explicitly compiled and initialized by Tauriless; positioner includes its tray feature |
+| autostart, cli, clipboard-manager, deep-link, dialog, fs, geolocation, global-shortcut, http, log, process, SQL, stronghold, updater, upload, websocket, window-state | No | Event/channel mapping is ready where applicable, but commands are unavailable until the corresponding Rust crate is compiled and initialized |
+| barcode-scanner, biometric, haptics, nfc | No; unsupported | Mobile functionality is outside the supported platforms |
+
+Other official workspace plugins not in the shorter reference list, including
+localhost, persisted-scope, and single-instance, are also not compiled.
+
+`dialog` is intentionally not linked into the Windows `cdylib`: its current
+`rfd/common-controls-v6` dependency imports `TaskDialogIndirect`, which requires
+a Common Controls v6 activation manifest on the embedding executable. Deno,
+Node, Bun, PHP, and other arbitrary hosts cannot be assumed to provide one;
+linking it would make the DLL fail during loading before Tauriless can run.
 
 ## Security model
 

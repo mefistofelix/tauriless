@@ -3,9 +3,6 @@
   "productName": "Tauriless",
   "version": "0.1.0",
   "identifier": "dev.tauriless.runtime",
-  "build": {
-    "frontendDist": "assets"
-  },
   "app": {
     "windows": [],
     "security": {

@@ -1,6 +1,6 @@
 // Manual end-to-end demo for Tauriless' C ABI through Deno FFI.
 // Run from the workspace root after building and copying Deno:
-//   .\tauriless\target\debug\deno.exe run --allow-ffi examples\deno_ffi_demo.js
+//   .\tauriless\target\debug\deno.exe run --allow-ffi --allow-write examples\deno_ffi_demo.js
 
 const WINDOW_LABEL = "deno-ffi-demo";
 const TRAY_ID = "tauriless-deno-tray";
@@ -34,6 +34,7 @@ let nextId = 1;
 let timer = 0;
 let closed = false;
 let quitting = false;
+let indexHtmlPath = null;
 const pending = new Map();
 
 function lastError() {
@@ -80,7 +81,9 @@ function drain() {
   const batch = JSON.parse(text);
   for (const message of batch.messages ?? []) {
     console.log("[tauri]", JSON.stringify(message));
-    if (message.kind === "result") {
+    if (message.kind === "asset-request") {
+      void handleAssetRequest(message).catch(reportAsyncError);
+    } else if (message.kind === "result") {
       const callback = pending.get(message.id);
       if (callback) {
         pending.delete(message.id);
@@ -94,6 +97,30 @@ function drain() {
     } else if (message.kind === "event") {
       handleEvent(message);
     }
+  }
+}
+
+async function handleAssetRequest(message) {
+  const pathname = new URL(message.url).pathname;
+  if (pathname === "/" || pathname === "/index.html") {
+    await request("tauriless:asset-response", {
+      requestId: message.requestId,
+      path: indexHtmlPath,
+    });
+  } else if (pathname === "/runtime.css") {
+    await request("tauriless:asset-response", {
+      requestId: message.requestId,
+      mime: "text/css; charset=utf-8",
+      content:
+        "body::before{content:'CSS da Deno: content + mime';display:block;padding:7px 12px;background:#165b85;color:white;text-align:center;font:12px system-ui}",
+    });
+  } else {
+    await request("tauriless:asset-response", {
+      requestId: message.requestId,
+      status: 404,
+      mime: "text/plain; charset=utf-8",
+      content: `Asset non trovato: ${pathname}`,
+    });
   }
 }
 
@@ -136,6 +163,17 @@ function reportAsyncError(error) {
   console.error("[errore asincrono]", error);
 }
 
+function scheduleOptionalAutoExit() {
+  try {
+    const milliseconds = Number(Deno.env.get("TAURILESS_DEMO_AUTO_EXIT_MS"));
+    if (Number.isFinite(milliseconds) && milliseconds > 0) {
+      setTimeout(() => shutdown(0), milliseconds);
+    }
+  } catch {
+    // Reading the optional variable is not required during an interactive run.
+  }
+}
+
 function notify(title, body) {
   return request("plugin:notification|notify", {
     options: { title, body },
@@ -163,6 +201,7 @@ const WEBVIEW_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="runtime.css">
   <title>Tauriless · Deno FFI</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
@@ -230,6 +269,12 @@ const WEBVIEW_HTML = `<!doctype html>
 </html>`;
 
 async function createDemo() {
+  indexHtmlPath = await Deno.makeTempFile({
+    prefix: "tauriless-deno-ffi-",
+    suffix: ".html",
+  });
+  await Deno.writeTextFile(indexHtmlPath, WEBVIEW_HTML);
+
   timer = setInterval(() => {
     try {
       drain();
@@ -239,15 +284,12 @@ async function createDemo() {
     }
   }, 16);
 
-  // tauriless/assets/index.html is only a generic inline-document loader. The complete
-  // demo page remains in this file and the fragment is never sent to a server.
-  const appUrl = `index.html#${encodeURIComponent(WEBVIEW_HTML)}`;
   console.error("[fase] creazione webview…");
   await request("plugin:webview|create_webview_window", {
     options: {
       label: WINDOW_LABEL,
       title: "Tauriless · Deno FFI",
-      url: appUrl,
+      url: "index.html",
       width: 760,
       height: 720,
       minWidth: 520,
@@ -289,6 +331,7 @@ async function createDemo() {
   console.log(
     "[pronto] Droppa file nella finestra; usa 'Esci' dal tray per terminare.",
   );
+  scheduleOptionalAutoExit();
 }
 
 function shutdown(exitCode) {
@@ -307,6 +350,14 @@ function shutdown(exitCode) {
       console.error(`[destroy] status ${status}: ${lastError()}`);
     }
     dylib.close();
+  }
+  if (indexHtmlPath !== null) {
+    try {
+      Deno.removeSync(indexHtmlPath);
+    } catch {
+      // The temporary file may already have been removed.
+    }
+    indexHtmlPath = null;
   }
   Deno.exit(exitCode);
 }

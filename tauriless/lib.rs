@@ -4,6 +4,8 @@
 //! protocol. Tauri remains the owner of every window and webview; this crate
 //! only owns the `tauri::App` that must stay on the host's main thread.
 
+mod asset_protocol;
+
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -41,6 +43,12 @@ const FORWARDED_EVENT_NAMES: &[&str] = &[
     "tauri://drag-leave",
     "tauri://suspended",
     "tauri://resumed",
+    // Named Rust event-bus emissions from the official plugins-workspace v2.
+    // Most other asynchronous plugin APIs use Channel<T> and are caught by
+    // the global channel_interceptor instead of this exact-name list.
+    "deep-link://new-url",
+    "log://log",
+    "store://change",
     // Application messages emitted by webview JavaScript through Tauri's
     // standard event plugin. This is an event name, not a custom command.
     "tauriless://webview-message",
@@ -89,6 +97,7 @@ pub struct Tauriless {
     app: Option<tauri::App>,
     owner: ThreadId,
     outbox: Outbox,
+    asset_protocol: asset_protocol::AssetProtocol,
     draining: bool,
     drain_buffer: CString,
 }
@@ -98,11 +107,16 @@ impl Tauriless {
         let outbox = Outbox::default();
         let event_plugin = event_forwarder(Arc::clone(&outbox));
         let channel_outbox = Arc::clone(&outbox);
-        let app = tauri::Builder::default()
+        let asset_protocol = asset_protocol::AssetProtocol::new(Arc::clone(&outbox));
+        let builder = tauri::Builder::default()
             .plugin(event_plugin)
             .plugin(tauri_plugin_notification::init())
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_os::init())
+            .plugin(tauri_plugin_positioner::init())
+            .plugin(tauri_plugin_store::Builder::default().build());
+        let app = asset_protocol
+            .register(builder)
             .channel_interceptor(move |webview, callback, index, body| {
                 push(
                     &channel_outbox,
@@ -130,6 +144,7 @@ impl Tauriless {
             app: Some(app),
             owner: thread::current().id(),
             outbox,
+            asset_protocol,
             draining: false,
             drain_buffer: CString::default(),
         })
@@ -142,6 +157,16 @@ impl Tauriless {
         self.check_running()?;
         let request: Request = serde_json::from_slice(bytes)?;
         validate(&request)?;
+
+        if request.cmd == asset_protocol::RESPONSE_COMMAND {
+            let outcome = self
+                .asset_protocol
+                .respond(request.payload)
+                .map(|_| Value::Null)
+                .map_err(Value::String);
+            result(&self.outbox, request.id, outcome);
+            return Ok(());
+        }
 
         let webviews = self.app()?.webview_windows();
         if webviews.is_empty() {

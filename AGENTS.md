@@ -27,7 +27,13 @@ experimental `node:ffi` module.
   bridge. Start with no window or webview.
 - With no webview, accept only `plugin:webview|create_webview_window`,
   deserialize its upstream `WindowConfig`, and build it with Tauri's public
-  `WebviewWindowBuilder`. This is the bridge's only special-cased command.
+  `WebviewWindowBuilder`.
+- Override Tauri's compile-time `tauri` asset resolver through its public
+  asynchronous URI scheme hook. Forward requests to drain as `asset-request`
+  messages and accept `tauriless:asset-response` through the existing send ABI.
+  A response may contain a local `path` for Rust to read or UTF-8 `content`,
+  with optional status, headers, and MIME. This bridge-control message and the
+  initial window creation are the only special-cased commands.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted
@@ -36,11 +42,18 @@ experimental `node:ffi` module.
 - Intercept every Tauri `Channel<T>` delivery into the drain outbox and consume
   it before JavaScript delivery. This experimental behavior intentionally also
   applies to channels created by code inside real webviews.
-- Forward the `tauriless://webview-message` application event to the drain
-  outbox. Webviews emit it through Tauri's standard event plugin; do not replace
-  it with a custom application command.
+- Forward the exact named Rust event-bus emissions from Tauri core and the
+  audited official plugins-workspace to the drain outbox. This includes the
+  `tauriless://webview-message` application event emitted by webviews through
+  Tauri's standard event plugin; do not replace it with a custom application
+  command. Keep dynamic `Channel<T>` traffic in the global interceptor instead.
 - Do not add custom application commands or reimplement window, tray, menu,
   notification, opener, or resource operations in this bridge.
+- Keep the official notification, opener, OS, positioner (with tray support),
+  and store plugins initialized. Other plugins-workspace crates remain optional
+  and uncompiled unless the user explicitly changes that set. Do not link the
+  current dialog plugin into the Windows cdylib: its forced Common Controls v6
+  import prevents loading from arbitrary hosts without an activation manifest.
 - Return asynchronous results and events from `tauriless_drain`; never call a
   foreign-language callback from Rust.
 - Do not add dependency scheduling or readiness queues. A host that creates a
@@ -59,6 +72,8 @@ experimental `node:ffi` module.
   workflow must use the repository `GITHUB_TOKEN`, not an npmjs token.
 - Supported release targets are x86-64 Windows MSVC, macOS Intel, and Linux
   glibc. ARM and musl are intentionally out of scope.
+- Android and iOS are out of scope. Do not add mobile-only plugin APIs or map
+  mobile plugin-listener events into the desktop bridge.
 - Keep the npm JavaScript adapter in one file and bind exactly the five C ABI
   functions through the built-in FFI of Node, Deno, or Bun. Its class may only
   normalize create, JSON send, borrowed JSON drain, error copying, and
