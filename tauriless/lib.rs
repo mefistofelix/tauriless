@@ -24,7 +24,7 @@ use tauri::{
 };
 use thiserror::Error;
 
-const NATIVE_EVENT_NAMES: &[&str] = &[
+const FORWARDED_EVENT_NAMES: &[&str] = &[
     "tauri://resize",
     "tauri://move",
     "tauri://close-requested",
@@ -33,12 +33,17 @@ const NATIVE_EVENT_NAMES: &[&str] = &[
     "tauri://blur",
     "tauri://scale-change",
     "tauri://theme-changed",
+    "tauri://window-created",
+    "tauri://webview-created",
     "tauri://drag-enter",
     "tauri://drag-over",
     "tauri://drag-drop",
     "tauri://drag-leave",
     "tauri://suspended",
     "tauri://resumed",
+    // Application messages emitted by webview JavaScript through Tauri's
+    // standard event plugin. This is an event name, not a custom command.
+    "tauriless://webview-message",
 ];
 const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
 
@@ -373,7 +378,7 @@ fn forward_native_events<M: Listener<tauri::Wry>>(
     source: &'static str,
     label: &str,
 ) -> Vec<EventId> {
-    NATIVE_EVENT_NAMES
+    FORWARDED_EVENT_NAMES
         .iter()
         .map(|&name| {
             let outbox = Arc::clone(outbox);

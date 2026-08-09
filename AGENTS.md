@@ -36,6 +36,9 @@ experimental `node:ffi` module.
 - Intercept every Tauri `Channel<T>` delivery into the drain outbox and consume
   it before JavaScript delivery. This experimental behavior intentionally also
   applies to channels created by code inside real webviews.
+- Forward the `tauriless://webview-message` application event to the drain
+  outbox. Webviews emit it through Tauri's standard event plugin; do not replace
+  it with a custom application command.
 - Do not add custom application commands or reimplement window, tray, menu,
   notification, opener, or resource operations in this bridge.
 - Return asynchronous results and events from `tauriless_drain`; never call a

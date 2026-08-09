@@ -31,6 +31,12 @@ clearInterval(timer);
 tauriless.close();
 ```
 
+The repository also contains a
+[single-file Deno demo](https://github.com/mefistofelix/tauriless/blob/main/examples/deno_npm_demo.js)
+that imports this package directly. Its embedded webview demonstrates
+bidirectional Tauri events, host-driven `setHtml`, drag and drop, OS
+notifications, and a tray menu without a web server or separate HTML file.
+
 - Node 26.1+: run with `--experimental-ffi` and use `node:ffi` pointer helpers.
 - Deno: run with `--allow-ffi`.
 - Bun: no additional flag is required.

@@ -122,6 +122,16 @@ their upstream event names and payloads:
 }
 ```
 
+Because Tauri's listener API has no wildcard event name, Tauriless registers all
+16 named core events exposed by the pinned Tauri version: resize, move, close,
+destroy, focus, blur, scale, theme, window/webview creation, drag enter/over/drop/
+leave, suspend, and resume. Menu, tray, and plugin callback channels use dynamic
+IDs instead of event names and are already covered generically by the global
+`Channel<T>` interceptor. The bundled notification, opener, and OS plugins do
+not define additional named Rust events in their pinned versions.
+`tauri://created` and `tauri://error` are local JavaScript constructor signals,
+not emissions on Tauri's Rust event bus, so they are intentionally not listed.
+
 There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
 For binary Tauri responses, `value` is represented as `{ "bytes": [...] }`.
@@ -175,6 +185,20 @@ The debug-directory copy is intentional: the upstream notification plugin
 recognizes executables under `target/debug` as development applications and does
 not require an installed Windows AppUserModelID. Use **Esci** in the tray menu
 or `Ctrl+C` to shut the runtime down.
+
+[`examples/deno_npm_demo.js`](examples/deno_npm_demo.js) is the equivalent
+single-file example for the precompiled package. It imports
+`npm:@mefistofelix/tauriless` directly and demonstrates bidirectional messaging:
+webview JavaScript emits `tauriless://webview-message` through Tauri's standard
+event plugin and Deno receives it through `drain()`; Deno emits a targeted
+`tauriless://host-message` back to the webview. The latter is also used by the
+example's `setHtml()` helper to update a DOM subtree. Tauri exposes neither
+`Webview::eval` nor a native `set_html` as public IPC commands, so no custom
+command or Tauri patch is introduced.
+
+```powershell
+.\deno.exe run --allow-ffi .\examples\deno_npm_demo.js
+```
 
 ## npm package and cross-platform release
 
