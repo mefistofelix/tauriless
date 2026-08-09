@@ -62,3 +62,7 @@ C, $library);
 
 The repository README contains a complete PHP example with JSON send, a 16 ms
 drain loop, synchronous JSON decoding of the borrowed result, and destruction.
+It also shows the TrueAsync variant: the same FFI setup runs in an
+`Async\spawn` coroutine and uses the event-loop-backed `Async\delay(16)` instead
+of blocking with `usleep`. Tauriless must stay on that main OS thread; do not use
+`Async\spawn_thread` for its runtime.

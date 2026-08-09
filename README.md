@@ -281,6 +281,45 @@ try {
 }
 ```
 
+### PHP with TrueAsync
+
+With [PHP TrueAsync](https://true-async.github.io/), keep the FFI declarations,
+runtime creation, request encoding, and `tauriless_send` call above unchanged.
+Replace only the final blocking `while`/`usleep` section with a coroutine whose
+`Async\delay(16)` is backed by the TrueAsync/libuv event loop timer:
+
+```php
+$pump = Async\spawn(function () use ($ffi, $runtime): void {
+    try {
+        while (true) {
+            $batch = $ffi->tauriless_drain($runtime);
+            if (FFI::isNull($batch)) checkStatus($ffi, 2, 'drain');
+
+            // FFI::string copies Rust's borrowed pointer before the next drain.
+            $messages = json_decode(
+                FFI::string($batch),
+                true,
+                flags: JSON_THROW_ON_ERROR,
+            );
+            foreach ($messages['messages'] ?? [] as $message) {
+                echo json_encode($message, JSON_THROW_ON_ERROR), PHP_EOL;
+            }
+
+            Async\delay(16);
+        }
+    } finally {
+        checkStatus($ffi, $ffi->tauriless_destroy($runtime), 'destroy');
+    }
+});
+
+Async\await($pump);
+```
+
+`delay()` suspends only this coroutine, so the TrueAsync event loop can continue
+servicing its other work between GUI iterations. Do not use
+`Async\spawn_thread`: creation, drain, send, and destruction of one Tauriless
+instance must remain on the same main OS thread.
+
 `.github/workflows/release-native.yml` builds each binary on its matching native
 GitHub-hosted x86-64 runner: Windows Server, macOS Intel, and Ubuntu. There is
 no cross-compilation, Zig, custom SDK, or Docker involved. Pushing a `vX.Y.Z`
