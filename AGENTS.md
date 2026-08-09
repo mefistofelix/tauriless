@@ -17,8 +17,8 @@ experimental `node:ffi` module.
   returns immediately. The host owns the 16 ms timer.
 - Create and pump Tauri on the host's main OS thread. Every call on a given
   instance must happen on the thread that created it.
-- Keep the foreign interface to opaque instance pointers plus UTF-8 JSON byte
-  slices. Do not mirror Tauri's resource table in the bridge.
+- Keep the foreign interface to opaque instance pointers plus NUL-terminated
+  UTF-8 JSON strings. Do not mirror Tauri's resource table in the bridge.
 - Windows and webviews remain owned by Tauri and are addressed by Tauri labels.
 - Do not implement a compatibility layer for `@tauri-apps/api`. It is available
   only insofar as the standard Tauri Builder and plugins provide it for free.
@@ -56,10 +56,13 @@ experimental `node:ffi` module.
   workflow must use the repository `GITHUB_TOKEN`, not an npmjs token.
 - Supported release targets are x86-64 Windows MSVC, macOS Intel, and Linux
   glibc. ARM and musl are intentionally out of scope.
-- Keep the npm JavaScript adapter in one file and bind exactly the six C ABI
+- Keep the npm JavaScript adapter in one file and bind exactly the five C ABI
   functions through the built-in FFI of Node, Deno, or Bun. Its class may only
-  normalize create, JSON send, JSON drain, error copying, destruction, and
-  native-buffer freeing. Do not add callbacks, resource wrappers, or a timer.
+  normalize create, JSON send, borrowed JSON drain, error copying, and
+  destruction. Do not add callbacks, resource wrappers, or a timer.
+- Follow the TDLib receive lifetime pattern: Rust owns the NUL-terminated drain
+  JSON and may replace it on the next drain or destroy. Every host must copy or
+  decode it synchronously before that point; no exported buffer-free function.
 - Build each release binary on its matching GitHub-hosted x86-64 runner and
   publish them in a GitHub Release. A separate release-triggered workflow
   downloads those binaries and publishes the single npm tarball. Do not mix npm

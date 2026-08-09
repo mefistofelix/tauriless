@@ -1,6 +1,6 @@
 # tauriless
 
-Tauriless binds the same six C-ABI functions through the built-in FFI of Node,
+Tauriless binds the same five C-ABI functions through the built-in FFI of Node,
 Deno, and Bun. There is no Node-API addon and no JavaScript resource or callback
 layer.
 
@@ -52,19 +52,13 @@ if ($library === false) throw new RuntimeException('Set TAURILESS_LIBRARY_PATH')
 
 $ffi = FFI::cdef(<<<'C'
 typedef struct Tauriless Tauriless;
-typedef struct {
-  unsigned char *data;
-  unsigned long long len;
-  unsigned long long capacity;
-} TaurilessBuffer;
 int tauriless_create(Tauriless **);
-int tauriless_send(Tauriless *, const unsigned char *, unsigned long long);
-int tauriless_drain(Tauriless *, TaurilessBuffer *);
+int tauriless_send(Tauriless *, const char *);
+const char *tauriless_drain(Tauriless *);
 int tauriless_destroy(Tauriless *);
-int tauriless_last_error(TaurilessBuffer *);
-void tauriless_buffer_free(void *, unsigned long long, unsigned long long);
+const char *tauriless_last_error(void);
 C, $library);
 ```
 
 The repository README contains a complete PHP example with JSON send, a 16 ms
-drain loop, owned-buffer freeing, error copying, and destruction.
+drain loop, synchronous JSON decoding of the borrowed result, and destruction.

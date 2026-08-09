@@ -2,9 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const POINTER_SIZE = 8;
-const OWNED_BUFFER_WORDS = 3;
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 const deno = typeof globalThis.Deno?.dlopen === "function";
 const bun = !deno && typeof globalThis.Bun?.version === "string";
 const libraries = {
@@ -52,41 +50,34 @@ if (deno) {
   const functions = Deno.dlopen(libraryPath, {
     tauriless_create: { parameters: ["buffer"], result: "i32" },
     tauriless_send: {
-      parameters: ["pointer", "buffer", "usize"],
-      result: "i32",
-    },
-    tauriless_drain: {
       parameters: ["pointer", "buffer"],
       result: "i32",
     },
-    tauriless_destroy: { parameters: ["pointer"], result: "i32" },
-    tauriless_last_error: { parameters: ["buffer"], result: "i32" },
-    tauriless_buffer_free: {
-      parameters: ["pointer", "usize", "usize"],
-      result: "void",
+    tauriless_drain: {
+      parameters: ["pointer"],
+      result: "pointer",
     },
+    tauriless_destroy: { parameters: ["pointer"], result: "i32" },
+    tauriless_last_error: { parameters: [], result: "pointer" },
   }).symbols;
 
   backend = {
     words: (length) => new BigUint64Array(length),
     create: (out) => functions.tauriless_create(out),
     handle: (out) => Deno.UnsafePointer.create(out[0]),
-    send: (runtime, bytes) =>
-      functions.tauriless_send(runtime, bytes, BigInt(bytes.byteLength)),
-    drain: (runtime, out) => functions.tauriless_drain(runtime, out),
+    send: (runtime, bytes) => functions.tauriless_send(runtime, bytes),
+    drain: (runtime) => {
+      const pointer = functions.tauriless_drain(runtime);
+      return pointer === null
+        ? null
+        : new Deno.UnsafePointerView(pointer).getCString();
+    },
     destroy: (runtime) => functions.tauriless_destroy(runtime),
-    lastError: (out) => functions.tauriless_last_error(out),
-    readOwned(out) {
-      const [address, length, capacity] = out;
-      const pointer = Deno.UnsafePointer.create(address);
-      if (pointer === null) return "";
-      try {
-        return decoder.decode(
-          new Deno.UnsafePointerView(pointer).getArrayBuffer(Number(length)),
-        );
-      } finally {
-        functions.tauriless_buffer_free(pointer, length, capacity);
-      }
+    lastError: () => {
+      const pointer = functions.tauriless_last_error();
+      return pointer === null
+        ? ""
+        : new Deno.UnsafePointerView(pointer).getCString();
     },
   };
 } else if (bun) {
@@ -94,16 +85,12 @@ if (deno) {
   const functions = bunFfi.dlopen(libraryPath, {
     tauriless_create: { args: ["ptr"], returns: "i32" },
     tauriless_send: {
-      args: ["ptr", "ptr", "usize"],
+      args: ["ptr", "ptr"],
       returns: "i32",
     },
-    tauriless_drain: { args: ["ptr", "ptr"], returns: "i32" },
+    tauriless_drain: { args: ["ptr"], returns: "cstring" },
     tauriless_destroy: { args: ["ptr"], returns: "i32" },
-    tauriless_last_error: { args: ["ptr"], returns: "i32" },
-    tauriless_buffer_free: {
-      args: ["ptr", "usize", "usize"],
-      returns: "void",
-    },
+    tauriless_last_error: { args: [], returns: "cstring" },
   }).symbols;
 
   ({ isMainThread } = await import("node:worker_threads"));
@@ -112,31 +99,13 @@ if (deno) {
     create: (out) => functions.tauriless_create(bunFfi.ptr(out)),
     handle: (out) => Number(out[0]),
     send: (runtime, bytes) =>
-      functions.tauriless_send(
-        runtime,
-        bunFfi.ptr(bytes),
-        bytes.byteLength,
-      ),
-    drain: (runtime, out) =>
-      functions.tauriless_drain(runtime, bunFfi.ptr(out)),
-    destroy: (runtime) => functions.tauriless_destroy(runtime),
-    lastError: (out) => functions.tauriless_last_error(bunFfi.ptr(out)),
-    readOwned(out) {
-      const [address, length, capacity] = out;
-      if (address === 0n) return "";
-      const pointer = Number(address);
-      try {
-        return decoder.decode(
-          bunFfi.toArrayBuffer(pointer, 0, Number(length)),
-        );
-      } finally {
-        functions.tauriless_buffer_free(
-          pointer,
-          Number(length),
-          Number(capacity),
-        );
-      }
+      functions.tauriless_send(runtime, bunFfi.ptr(bytes)),
+    drain: (runtime) => {
+      const value = functions.tauriless_drain(runtime);
+      return value == null ? null : String(value);
     },
+    destroy: (runtime) => functions.tauriless_destroy(runtime),
+    lastError: () => String(functions.tauriless_last_error() ?? ""),
   };
 } else {
   let ffi;
@@ -155,19 +124,15 @@ if (deno) {
   const functions = ffi.dlopen(libraryPath, {
     tauriless_create: { arguments: ["pointer"], return: "i32" },
     tauriless_send: {
-      arguments: ["pointer", "pointer", "u64"],
-      return: "i32",
-    },
-    tauriless_drain: {
       arguments: ["pointer", "pointer"],
       return: "i32",
     },
-    tauriless_destroy: { arguments: ["pointer"], return: "i32" },
-    tauriless_last_error: { arguments: ["pointer"], return: "i32" },
-    tauriless_buffer_free: {
-      arguments: ["pointer", "u64", "u64"],
-      return: "void",
+    tauriless_drain: {
+      arguments: ["pointer"],
+      return: "pointer",
     },
+    tauriless_destroy: { arguments: ["pointer"], return: "i32" },
+    tauriless_last_error: { arguments: [], return: "pointer" },
   }).functions;
 
   const readPointer = (buffer, offset = 0) =>
@@ -177,35 +142,15 @@ if (deno) {
     create: (out) => functions.tauriless_create(ffi.getRawPointer(out)),
     handle: (out) => readPointer(out),
     send: (runtime, bytes) =>
-      functions.tauriless_send(
-        runtime,
-        ffi.getRawPointer(bytes),
-        BigInt(bytes.byteLength),
-      ),
-    drain: (runtime, out) =>
-      functions.tauriless_drain(runtime, ffi.getRawPointer(out)),
+      functions.tauriless_send(runtime, ffi.getRawPointer(bytes)),
+    drain: (runtime) => ffi.toString(functions.tauriless_drain(runtime)),
     destroy: (runtime) => functions.tauriless_destroy(runtime),
-    lastError: (out) => functions.tauriless_last_error(ffi.getRawPointer(out)),
-    readOwned(out) {
-      const address = readPointer(out);
-      const length = readPointer(out, POINTER_SIZE);
-      const capacity = readPointer(out, POINTER_SIZE * 2);
-      if (address === 0n) return "";
-      try {
-        return ffi.toBuffer(address, Number(length), true).toString("utf8");
-      } finally {
-        functions.tauriless_buffer_free(address, length, capacity);
-      }
-    },
+    lastError: () => ffi.toString(functions.tauriless_last_error()) ?? "",
   };
 }
 
 function lastError() {
-  const out = backend.words(OWNED_BUFFER_WORDS);
-  const status = backend.lastError(out);
-  return status === 0
-    ? backend.readOwned(out)
-    : `unable to read native error (status ${status})`;
+  return backend.lastError();
 }
 
 function check(status, operation) {
@@ -233,17 +178,25 @@ export class Tauriless {
 
   send(request) {
     this.#assertOpen();
-    const bytes = encoder.encode(
+    const encoded = encoder.encode(
       typeof request === "string" ? request : JSON.stringify(request),
     );
+    if (encoded.includes(0)) {
+      throw new TypeError("JSON must not contain a raw NUL byte");
+    }
+    const bytes = new Uint8Array(encoded.byteLength + 1);
+    bytes.set(encoded);
     check(backend.send(this.#runtime, bytes), "tauriless_send");
   }
 
   drain() {
     this.#assertOpen();
-    const out = backend.words(OWNED_BUFFER_WORDS);
-    check(backend.drain(this.#runtime, out), "tauriless_drain");
-    return JSON.parse(backend.readOwned(out));
+    // Each backend copies Rust's borrowed C string before returning here.
+    const json = backend.drain(this.#runtime);
+    if (json === null) {
+      throw new Error(`tauriless_drain failed: ${lastError()}`);
+    }
+    return JSON.parse(json);
   }
 
   close() {

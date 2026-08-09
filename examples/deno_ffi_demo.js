@@ -5,33 +5,30 @@
 const WINDOW_LABEL = "deno-ffi-demo";
 const TRAY_ID = "tauriless-deno-tray";
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
 
 const dylib = Deno.dlopen(
   new URL("../tauriless/target/debug/tauriless.dll", import.meta.url),
   {
     tauriless_create: { parameters: ["buffer"], result: "i32" },
     tauriless_send: {
-      parameters: ["pointer", "buffer", "usize"],
-      result: "i32",
-    },
-    tauriless_drain: {
       parameters: ["pointer", "buffer"],
       result: "i32",
     },
-    tauriless_destroy: { parameters: ["pointer"], result: "i32" },
-    tauriless_last_error: { parameters: ["buffer"], result: "i32" },
-    tauriless_buffer_free: {
-      parameters: ["pointer", "usize", "usize"],
-      result: "void",
+    tauriless_drain: {
+      parameters: ["pointer"],
+      result: "pointer",
     },
+    tauriless_destroy: { parameters: ["pointer"], result: "i32" },
+    tauriless_last_error: { parameters: [], result: "pointer" },
   },
 );
 
 const handleOut = new BigUint64Array(1);
 checkStatus("tauriless_create", dylib.symbols.tauriless_create(handleOut));
 const runtime = Deno.UnsafePointer.create(handleOut[0]);
-if (runtime === null) throw new Error("tauriless_create returned a null handle");
+if (runtime === null) {
+  throw new Error("tauriless_create returned a null handle");
+}
 
 let nextId = 1;
 let timer = 0;
@@ -39,46 +36,33 @@ let closed = false;
 let quitting = false;
 const pending = new Map();
 
-function readOwnedBuffer(buffer) {
-  const address = buffer[0];
-  const length = buffer[1];
-  const capacity = buffer[2];
-  if (address === 0n) return "";
-
-  const pointer = Deno.UnsafePointer.create(address);
-  if (pointer === null) return "";
-  try {
-    const bytes = new Uint8Array(
-      new Deno.UnsafePointerView(pointer).getArrayBuffer(Number(length)),
-    );
-    return decoder.decode(bytes);
-  } finally {
-    dylib.symbols.tauriless_buffer_free(pointer, length, capacity);
-  }
-}
-
 function lastError() {
-  const buffer = new BigUint64Array(3);
-  const status = dylib.symbols.tauriless_last_error(buffer);
-  return status === 0 ? readOwnedBuffer(buffer) : `status ${status}`;
+  const pointer = dylib.symbols.tauriless_last_error();
+  return pointer === null
+    ? ""
+    : new Deno.UnsafePointerView(pointer).getCString();
 }
 
 function checkStatus(operation, status) {
-  if (status !== 0) throw new Error(`${operation} failed (${status}): ${lastError()}`);
+  if (status !== 0) {
+    throw new Error(`${operation} failed (${status}): ${lastError()}`);
+  }
 }
 
 function request(cmd, payload = {}, webview) {
   const id = nextId++;
   const request = { id, cmd, payload };
   if (webview !== undefined) request.webview = webview;
-  const bytes = encoder.encode(JSON.stringify(request));
+  const encoded = encoder.encode(JSON.stringify(request));
+  const bytes = new Uint8Array(encoded.length + 1);
+  bytes.set(encoded);
 
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject, cmd });
     try {
       checkStatus(
         `tauriless_send(${cmd})`,
-        dylib.symbols.tauriless_send(runtime, bytes, BigInt(bytes.length)),
+        dylib.symbols.tauriless_send(runtime, bytes),
       );
     } catch (error) {
       pending.delete(id);
@@ -89,10 +73,9 @@ function request(cmd, payload = {}, webview) {
 
 function drain() {
   if (closed) return;
-  const buffer = new BigUint64Array(3);
-  checkStatus("tauriless_drain", dylib.symbols.tauriless_drain(runtime, buffer));
-  const text = readOwnedBuffer(buffer);
-  if (!text) return;
+  const pointer = dylib.symbols.tauriless_drain(runtime);
+  if (pointer === null) throw new Error(`tauriless_drain: ${lastError()}`);
+  const text = new Deno.UnsafePointerView(pointer).getCString();
 
   const batch = JSON.parse(text);
   for (const message of batch.messages ?? []) {
@@ -102,7 +85,9 @@ function drain() {
       if (callback) {
         pending.delete(message.id);
         if (message.ok) callback.resolve(message.value);
-        else callback.reject(new Error(`${callback.cmd}: ${JSON.stringify(message.error)}`));
+        else {callback.reject(
+            new Error(`${callback.cmd}: ${JSON.stringify(message.error)}`),
+          );}
       }
     } else if (message.kind === "channel") {
       handleChannel(message);
@@ -301,20 +286,26 @@ async function createDemo() {
   });
 
   console.log("[pronto] Webview e systray attive.");
-  console.log("[pronto] Droppa file nella finestra; usa 'Esci' dal tray per terminare.");
+  console.log(
+    "[pronto] Droppa file nella finestra; usa 'Esci' dal tray per terminare.",
+  );
 }
 
 function shutdown(exitCode) {
   if (quitting) return;
   quitting = true;
   if (timer) clearInterval(timer);
-  for (const { reject } of pending.values()) reject(new Error("Tauriless in chiusura"));
+  for (const { reject } of pending.values()) {
+    reject(new Error("Tauriless in chiusura"));
+  }
   pending.clear();
 
   if (!closed) {
     closed = true;
     const status = dylib.symbols.tauriless_destroy(runtime);
-    if (status !== 0) console.error(`[destroy] status ${status}: ${lastError()}`);
+    if (status !== 0) {
+      console.error(`[destroy] status ${status}: ${lastError()}`);
+    }
     dylib.close();
   }
   Deno.exit(exitCode);

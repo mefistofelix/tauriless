@@ -7,8 +7,8 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    ffi::c_void,
-    ptr, slice,
+    ffi::{c_char, CStr, CString},
+    ptr,
     sync::{Arc, Mutex},
     thread::{self, ThreadId},
 };
@@ -85,6 +85,7 @@ pub struct Tauriless {
     owner: ThreadId,
     outbox: Outbox,
     draining: bool,
+    drain_buffer: CString,
 }
 
 impl Tauriless {
@@ -125,6 +126,7 @@ impl Tauriless {
             owner: thread::current().id(),
             outbox,
             draining: false,
+            drain_buffer: CString::default(),
         })
     }
 
@@ -415,34 +417,14 @@ pub const TAURILESS_INVALID_ARGUMENT: i32 = 1;
 pub const TAURILESS_ERROR: i32 = 2;
 pub const TAURILESS_PANIC: i32 = 3;
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct TaurilessBuffer {
-    pub data: *mut u8,
-    pub len: usize,
-    pub capacity: usize,
-}
-
-impl TaurilessBuffer {
-    const EMPTY: Self = Self {
-        data: ptr::null_mut(),
-        len: 0,
-        capacity: 0,
-    };
-
-    fn from_vec(mut value: Vec<u8>) -> Self {
-        let buffer = Self {
-            data: value.as_mut_ptr(),
-            len: value.len(),
-            capacity: value.capacity(),
-        };
-        std::mem::forget(value);
-        buffer
-    }
-}
-
 thread_local! {
-  static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
+  static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
+}
+
+fn set_last_error(mut message: String) {
+    message.retain(|character| character != '\0');
+    LAST_ERROR
+        .with(|slot| *slot.borrow_mut() = CString::new(message).expect("NUL bytes were removed"));
 }
 
 fn ffi<F>(operation: F) -> i32
@@ -452,12 +434,29 @@ where
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
         Ok(Ok(())) => TAURILESS_OK,
         Ok(Err((code, message))) => {
-            LAST_ERROR.with(|slot| *slot.borrow_mut() = message);
+            set_last_error(message);
             code
         }
         Err(_) => {
-            LAST_ERROR.with(|slot| *slot.borrow_mut() = "Rust panic at the C ABI boundary".into());
+            set_last_error("Rust panic at the C ABI boundary".into());
             TAURILESS_PANIC
+        }
+    }
+}
+
+fn ffi_pointer<F>(operation: F) -> *const c_char
+where
+    F: FnOnce() -> std::result::Result<*const c_char, (i32, String)>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(operation)) {
+        Ok(Ok(pointer)) => pointer,
+        Ok(Err((_code, message))) => {
+            set_last_error(message);
+            ptr::null()
+        }
+        Err(_) => {
+            set_last_error("Rust panic at the C ABI boundary".into());
+            ptr::null()
         }
     }
 }
@@ -476,23 +475,15 @@ pub unsafe extern "C" fn tauriless_create(out: *mut *mut Tauriless) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tauriless_send(
-    runtime: *mut Tauriless,
-    json: *const u8,
-    len: usize,
-) -> i32 {
+pub unsafe extern "C" fn tauriless_send(runtime: *mut Tauriless, json: *const c_char) -> i32 {
     ffi(|| {
         let runtime = runtime
             .as_mut()
             .ok_or((TAURILESS_INVALID_ARGUMENT, "runtime is null".into()))?;
-        if json.is_null() && len != 0 {
+        if json.is_null() {
             return Err((TAURILESS_INVALID_ARGUMENT, "json is null".into()));
         }
-        let bytes = if len == 0 {
-            &[]
-        } else {
-            slice::from_raw_parts(json, len)
-        };
+        let bytes = CStr::from_ptr(json).to_bytes();
         runtime
             .send(bytes)
             .map_err(|error| (TAURILESS_ERROR, error.to_string()))
@@ -500,23 +491,17 @@ pub unsafe extern "C" fn tauriless_send(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tauriless_drain(
-    runtime: *mut Tauriless,
-    out: *mut TaurilessBuffer,
-) -> i32 {
-    ffi(|| {
-        if out.is_null() {
-            return Err((TAURILESS_INVALID_ARGUMENT, "out is null".into()));
-        }
-        *out = TaurilessBuffer::EMPTY;
+pub unsafe extern "C" fn tauriless_drain(runtime: *mut Tauriless) -> *const c_char {
+    ffi_pointer(|| {
         let runtime = runtime
             .as_mut()
             .ok_or((TAURILESS_INVALID_ARGUMENT, "runtime is null".into()))?;
         let bytes = runtime
             .drain()
             .map_err(|error| (TAURILESS_ERROR, error.to_string()))?;
-        *out = TaurilessBuffer::from_vec(bytes);
-        Ok(())
+        runtime.drain_buffer = CString::new(bytes)
+            .map_err(|_| (TAURILESS_ERROR, "drain JSON contains a NUL byte".into()))?;
+        Ok(runtime.drain_buffer.as_ptr())
     })
 }
 
@@ -539,27 +524,9 @@ pub unsafe extern "C" fn tauriless_destroy(runtime: *mut Tauriless) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tauriless_last_error(out: *mut TaurilessBuffer) -> i32 {
-    ffi(|| {
-        if out.is_null() {
-            return Err((TAURILESS_INVALID_ARGUMENT, "out is null".into()));
-        }
-        *out = LAST_ERROR.with(|slot| TaurilessBuffer::from_vec(slot.borrow().as_bytes().to_vec()));
-        Ok(())
-    })
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tauriless_buffer_free(data: *mut c_void, len: usize, capacity: usize) {
-    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if !data.is_null() {
-            drop(Vec::from_raw_parts(data.cast::<u8>(), len, capacity));
-        }
-    }))
-    .is_err()
-    {
-        LAST_ERROR.with(|slot| *slot.borrow_mut() = "Rust panic while freeing a C buffer".into());
-    }
+pub extern "C" fn tauriless_last_error() -> *const c_char {
+    std::panic::catch_unwind(|| LAST_ERROR.with(|slot| slot.borrow().as_ptr()))
+        .unwrap_or(ptr::null())
 }
 
 #[cfg(test)]

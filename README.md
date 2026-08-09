@@ -8,7 +8,7 @@ This is a first C-ABI prototype. It deliberately has no N-API layer and no
 second callback or resource abstraction.
 
 Node-API is not required. The npm package selects the built-in FFI provided by
-Node, Deno, or Bun and binds exactly the six functions in
+Node, Deno, or Bun and binds exactly the five functions in
 `tauriless/include/tauriless.h` behind one small class.
 
 ## Architecture
@@ -17,8 +17,8 @@ The exported surface is intentionally small:
 
 ```c
 tauriless_create(&runtime);
-tauriless_send(runtime, json, json_len);
-tauriless_drain(runtime, &batch);
+tauriless_send(runtime, json);
+batch = tauriless_drain(runtime);
 tauriless_destroy(runtime);
 ```
 
@@ -125,8 +125,13 @@ their upstream event names and payloads:
 There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
 For binary Tauri responses, `value` is represented as `{ "bytes": [...] }`.
-Buffers returned by `tauriless_drain` or `tauriless_last_error` belong to the
-caller and must be released with `tauriless_buffer_free`.
+`tauriless_drain` returns a borrowed NUL-terminated UTF-8 JSON pointer, following
+the TDLib receive pattern. It remains valid until the next `tauriless_drain` or
+`tauriless_destroy` call. Hosts must copy or decode it before that point; the
+JavaScript adapter converts it to a JavaScript string and calls `JSON.parse()`
+synchronously, so Rust can safely replace the backing buffer on the next drain.
+`tauriless_last_error` similarly borrows thread-local storage until the next ABI
+error on that thread.
 
 ## Host timer
 
@@ -209,10 +214,11 @@ const timer = setInterval(() => {
 }, 16);
 ```
 
-The class adds only UTF-8 JSON and owned-buffer handling; it has no callbacks,
-resource layer, or internal timer. Run Node 26.1+ with `--experimental-ffi`,
-Deno with `--allow-ffi`, or Bun normally. Deno reads the consuming project's
-`.npmrc`, including the GitHub scope and token.
+The class adds only UTF-8 JSON encoding and immediate copying/parsing of the
+borrowed drain string; it has no callbacks, resource layer, or internal timer.
+Run Node 26.1+ with `--experimental-ffi`, Deno with `--allow-ffi`, or Bun
+normally. Deno reads the consuming project's `.npmrc`, including the GitHub
+scope and token.
 
 ## PHP FFI example
 
@@ -226,37 +232,18 @@ if ($library === false) throw new RuntimeException('Set TAURILESS_LIBRARY_PATH')
 
 $ffi = FFI::cdef(<<<'C'
 typedef struct Tauriless Tauriless;
-typedef struct TaurilessBuffer {
-  unsigned char *data;
-  unsigned long long len;
-  unsigned long long capacity;
-} TaurilessBuffer;
 int tauriless_create(Tauriless **out);
-int tauriless_send(Tauriless *runtime, const unsigned char *json, unsigned long long len);
-int tauriless_drain(Tauriless *runtime, TaurilessBuffer *out);
+int tauriless_send(Tauriless *runtime, const char *json);
+const char *tauriless_drain(Tauriless *runtime);
 int tauriless_destroy(Tauriless *runtime);
-int tauriless_last_error(TaurilessBuffer *out);
-void tauriless_buffer_free(void *data, unsigned long long len, unsigned long long capacity);
+const char *tauriless_last_error(void);
 C, $library);
-
-function ownedString(FFI $ffi, FFI\CData $buffer): string {
-    if (FFI::isNull($buffer->data)) return '';
-    try {
-        return FFI::string($buffer->data, $buffer->len);
-    } finally {
-        $ffi->tauriless_buffer_free(
-            $buffer->data,
-            $buffer->len,
-            $buffer->capacity,
-        );
-    }
-}
 
 function checkStatus(FFI $ffi, int $status, string $operation): void {
     if ($status === 0) return;
-    $error = $ffi->new('TaurilessBuffer');
-    $ffi->tauriless_last_error(FFI::addr($error));
-    throw new RuntimeException("$operation: " . ownedString($ffi, $error));
+    $error = $ffi->tauriless_last_error();
+    $message = FFI::isNull($error) ? '' : FFI::string($error);
+    throw new RuntimeException("$operation: $message");
 }
 
 $runtime = $ffi->new('Tauriless *');
@@ -267,20 +254,26 @@ $request = json_encode([
     'cmd' => 'plugin:webview|create_webview_window',
     'payload' => ['options' => ['label' => 'main', 'title' => 'Tauriless']],
 ], JSON_THROW_ON_ERROR);
-$bytes = $ffi->new('unsigned char[' . strlen($request) . ']', false);
+$bytes = $ffi->new('char[' . (strlen($request) + 1) . ']', false);
 FFI::memcpy($bytes, $request, strlen($request));
 checkStatus(
     $ffi,
-    $ffi->tauriless_send($runtime, $bytes, strlen($request)),
+    $ffi->tauriless_send($runtime, $bytes),
     'send',
 );
 
 try {
     while (true) {
-        $batch = $ffi->new('TaurilessBuffer');
-        checkStatus($ffi, $ffi->tauriless_drain($runtime, FFI::addr($batch)), 'drain');
-        $json = ownedString($ffi, $batch);
-        if ($json !== '') echo $json, PHP_EOL;
+        $batch = $ffi->tauriless_drain($runtime);
+        if (FFI::isNull($batch)) checkStatus($ffi, 2, 'drain');
+        $messages = json_decode(
+            FFI::string($batch),
+            true,
+            flags: JSON_THROW_ON_ERROR,
+        );
+        foreach ($messages['messages'] ?? [] as $message) {
+            echo json_encode($message, JSON_THROW_ON_ERROR), PHP_EOL;
+        }
         usleep(16_000);
     }
 } finally {
