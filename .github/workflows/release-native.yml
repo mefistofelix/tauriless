@@ -112,6 +112,8 @@ jobs:
     name: Finalize GitHub release
     needs: [windows, macos, linux]
     runs-on: ubuntu-22.04
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Publish checksums
         shell: bash
