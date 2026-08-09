@@ -132,6 +132,16 @@ not define additional named Rust events in their pinned versions.
 `tauri://created` and `tauri://error` are local JavaScript constructor signals,
 not emissions on Tauri's Rust event bus, so they are intentionally not listed.
 
+The pinned plugin audit is:
+
+| Tauri plugin | Asynchronous output handled by Tauriless |
+| --- | --- |
+| `core:window`, `core:webview` | All 16 statically named core events above |
+| `core:menu`, `core:tray` | Dynamic `Channel<T>` IDs, caught without a name list |
+| `core:event` | Arbitrary application-defined names; Tauriless explicitly registers `tauriless://webview-message` |
+| `core:app`, `core:image`, `core:path`, `core:resources` | No additional named asynchronous output on desktop |
+| notification, opener, OS | No additional named Rust events in the pinned plugin versions |
+
 There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
 For binary Tauri responses, `value` is represented as `{ "bytes": [...] }`.
