@@ -56,13 +56,19 @@ experimental `node:ffi` module.
   workflow must use the repository `GITHUB_TOKEN`, not an npmjs token.
 - Supported release targets are x86-64 Windows MSVC, macOS Intel, and Linux
   glibc. ARM and musl are intentionally out of scope.
-- Keep the npm JavaScript adapter synchronous and minimal: create, send, drain,
-  destroy, error copying, native-buffer freeing, and the host-owned timer.
+- Keep the npm JavaScript adapter in one file and bind exactly the six C ABI
+  functions through the built-in FFI of Node, Deno, or Bun. Its class may only
+  normalize create, JSON send, JSON drain, error copying, destruction, and
+  native-buffer freeing. Do not add callbacks, resource wrappers, or a timer.
 - Build each release binary on its matching GitHub-hosted x86-64 runner and
   publish them in a GitHub Release. A separate release-triggered workflow
   downloads those binaries and publishes the single npm tarball. Do not mix npm
   publishing into a native build job, and do not cross-compile unless native
   runner availability changes.
+- Keep native platform builds and npm publication manually runnable as
+  independent workflow components. A full tagged release may orchestrate them,
+  but retrying one native platform or npm publication must not require rebuilding
+  unrelated platforms.
 - Never commit generated native binaries or npm tarballs. The release workflow
   stages them under `npm/native` and publishes the resulting package.
 

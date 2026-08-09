@@ -4,9 +4,29 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build or prepare
+        required: true
+        type: string
+      component:
+        description: Native release component to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - prepare
+          - windows
+          - macos
+          - linux
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
 
 jobs:
   prepare-release:
@@ -14,14 +34,16 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Check tag and crate version
         shell: bash
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           crate_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' tauriless/Cargo.toml | head -n1)
           if [[ "$version" != "$crate_version" ]]; then
-            echo "Tag $GITHUB_REF_NAME does not match Cargo version $crate_version" >&2
+            echo "Tag $RELEASE_TAG does not match Cargo version $crate_version" >&2
             exit 1
           fi
 
@@ -30,23 +52,26 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
-          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release create "$GITHUB_REF_NAME" \
+          version="${RELEASE_TAG#v}"
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
               --verify-tag \
-              --title "Tauriless $GITHUB_REF_NAME" \
+              --title "Tauriless $RELEASE_TAG" \
               --generate-notes
           fi
           cp tauriless/include/tauriless.h "tauriless-v${version}.h"
-          gh release upload "$GITHUB_REF_NAME" "tauriless-v${version}.h" --clobber
+          gh release upload "$RELEASE_TAG" "tauriless-v${version}.h" --clobber
 
   windows:
     name: Windows x64 release
     needs: prepare-release
+    if: github.event_name == 'push' || inputs.component == 'all' || inputs.component == 'windows'
     runs-on: windows-2022
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
       - name: Upload Windows binary to release
@@ -54,18 +79,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $version = $env:GITHUB_REF_NAME.Substring(1)
+          $version = $env:RELEASE_TAG.Substring(1)
           $asset = "tauriless-v${version}-windows-x64.dll"
           Copy-Item tauriless/target/release/tauriless.dll $asset
-          gh release upload $env:GITHUB_REF_NAME $asset --clobber
+          gh release upload $env:RELEASE_TAG $asset --clobber
 
   macos:
     name: macOS Intel release
     needs: prepare-release
+    if: github.event_name == 'push' || inputs.component == 'all' || inputs.component == 'macos'
     runs-on: macos-15-intel
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
       - name: Upload macOS binary to release
@@ -73,18 +101,21 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           asset="tauriless-v${version}-macos-x64.dylib"
           cp tauriless/target/release/libtauriless.dylib "$asset"
-          gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
+          gh release upload "$RELEASE_TAG" "$asset" --clobber
 
   linux:
     name: Linux x64 release
     needs: prepare-release
+    if: github.event_name == 'push' || inputs.component == 'all' || inputs.component == 'linux'
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Install Tauri dependencies
         shell: bash
@@ -103,36 +134,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${GITHUB_REF_NAME#v}"
+          version="${RELEASE_TAG#v}"
           asset="tauriless-v${version}-linux-x64.so"
           cp tauriless/target/release/libtauriless.so "$asset"
-          gh release upload "$GITHUB_REF_NAME" "$asset" --clobber
+          gh release upload "$RELEASE_TAG" "$asset" --clobber
 
-  finalize-release:
-    name: Finalize GitHub release
+  publish-npm:
+    name: Publish npm package
     needs: [windows, macos, linux]
+    if: >-
+      always() &&
+      (github.event_name == 'push' || inputs.component == 'all') &&
+      needs.windows.result == 'success' &&
+      needs.macos.result == 'success' &&
+      needs.linux.result == 'success'
     runs-on: ubuntu-22.04
-    env:
-      GH_REPO: ${{ github.repository }}
     steps:
-      - name: Publish checksums
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          version="${GITHUB_REF_NAME#v}"
-          mkdir .release
-          gh release download "$GITHUB_REF_NAME" --dir .release \
-            --pattern "tauriless-v${version}-*" \
-            --pattern "tauriless-v${version}.h"
-          (cd .release && sha256sum tauriless-* > SHA256SUMS)
-          gh release upload "$GITHUB_REF_NAME" .release/SHA256SUMS --clobber
-
-      - name: Request npm publication
+      - name: Start separate npm workflow
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
             -f event_type=npm-publish \
-            -f "client_payload[tag]=$GITHUB_REF_NAME"
+            -f "client_payload[tag]=$RELEASE_TAG"

@@ -7,9 +7,9 @@ one non-blocking Tauri event-loop iteration approximately every 16 ms.
 This is a first C-ABI prototype. It deliberately has no N-API layer and no
 second callback or resource abstraction.
 
-Node-API is not required. Node.js 26.1 added the experimental built-in
-`node:ffi` module, so the npm package loads this same C ABI directly. Node must
-currently be started with `--experimental-ffi`.
+Node-API is not required. The npm package selects the built-in FFI provided by
+Node, Deno, or Bun and binds exactly the six functions in
+`tauriless/include/tauriless.h` behind one small class.
 
 ## Architecture
 
@@ -173,8 +173,8 @@ or `Ctrl+C` to shut the runtime down.
 
 ## npm package and cross-platform release
 
-The `npm/` package contains a small ESM loader for Node's built-in FFI and no
-native addon. It is published through GitHub Packages as
+The single `npm/index.js` adapter selects Node `node:ffi`, Deno FFI, or
+`bun:ffi`; it contains no native addon. It is published through GitHub Packages as
 `@mefistofelix/tauriless`. A release contains these x86-64 dynamic libraries in
 one tarball:
 
@@ -182,28 +182,130 @@ one tarball:
 - `native/darwin-x64/libtauriless.dylib`
 - `native/linux-x64/libtauriless.so`
 
-Use it with Node 26.1 or newer:
+Configure the GitHub registry and install it:
 
 ```console
 npm login --scope=@mefistofelix --auth-type=legacy --registry=https://npm.pkg.github.com
 npm install @mefistofelix/tauriless
-node --experimental-ffi app.mjs
 ```
 
 The login uses your GitHub username and a classic GitHub personal access token
 with `read:packages`; it is not an npmjs.com account.
 
+Node, Deno, and Bun use the same class:
+
+```js
+import { Tauriless } from "npm:@mefistofelix/tauriless";
+
+const tauriless = new Tauriless();
+tauriless.send({
+  id: 1,
+  cmd: "plugin:webview|create_webview_window",
+  payload: { options: { label: "main", title: "Tauriless" } },
+});
+
+const timer = setInterval(() => {
+  for (const message of tauriless.drain().messages) console.log(message);
+}, 16);
+```
+
+The class adds only UTF-8 JSON and owned-buffer handling; it has no callbacks,
+resource layer, or internal timer. Run Node 26.1+ with `--experimental-ffi`,
+Deno with `--allow-ffi`, or Bun normally. Deno reads the consuming project's
+`.npmrc`, including the GitHub scope and token.
+
+## PHP FFI example
+
+PHP loads the same release binary directly. Set `TAURILESS_LIBRARY_PATH` to the
+downloaded `.dll`, `.so`, or `.dylib` and enable the PHP FFI extension:
+
+```php
+<?php
+$library = getenv('TAURILESS_LIBRARY_PATH');
+if ($library === false) throw new RuntimeException('Set TAURILESS_LIBRARY_PATH');
+
+$ffi = FFI::cdef(<<<'C'
+typedef struct Tauriless Tauriless;
+typedef struct TaurilessBuffer {
+  unsigned char *data;
+  unsigned long long len;
+  unsigned long long capacity;
+} TaurilessBuffer;
+int tauriless_create(Tauriless **out);
+int tauriless_send(Tauriless *runtime, const unsigned char *json, unsigned long long len);
+int tauriless_drain(Tauriless *runtime, TaurilessBuffer *out);
+int tauriless_destroy(Tauriless *runtime);
+int tauriless_last_error(TaurilessBuffer *out);
+void tauriless_buffer_free(void *data, unsigned long long len, unsigned long long capacity);
+C, $library);
+
+function ownedString(FFI $ffi, FFI\CData $buffer): string {
+    if (FFI::isNull($buffer->data)) return '';
+    try {
+        return FFI::string($buffer->data, $buffer->len);
+    } finally {
+        $ffi->tauriless_buffer_free(
+            $buffer->data,
+            $buffer->len,
+            $buffer->capacity,
+        );
+    }
+}
+
+function checkStatus(FFI $ffi, int $status, string $operation): void {
+    if ($status === 0) return;
+    $error = $ffi->new('TaurilessBuffer');
+    $ffi->tauriless_last_error(FFI::addr($error));
+    throw new RuntimeException("$operation: " . ownedString($ffi, $error));
+}
+
+$runtime = $ffi->new('Tauriless *');
+checkStatus($ffi, $ffi->tauriless_create(FFI::addr($runtime)), 'create');
+
+$request = json_encode([
+    'id' => 1,
+    'cmd' => 'plugin:webview|create_webview_window',
+    'payload' => ['options' => ['label' => 'main', 'title' => 'Tauriless']],
+], JSON_THROW_ON_ERROR);
+$bytes = $ffi->new('unsigned char[' . strlen($request) . ']', false);
+FFI::memcpy($bytes, $request, strlen($request));
+checkStatus(
+    $ffi,
+    $ffi->tauriless_send($runtime, $bytes, strlen($request)),
+    'send',
+);
+
+try {
+    while (true) {
+        $batch = $ffi->new('TaurilessBuffer');
+        checkStatus($ffi, $ffi->tauriless_drain($runtime, FFI::addr($batch)), 'drain');
+        $json = ownedString($ffi, $batch);
+        if ($json !== '') echo $json, PHP_EOL;
+        usleep(16_000);
+    }
+} finally {
+    checkStatus($ffi, $ffi->tauriless_destroy($runtime), 'destroy');
+}
+```
+
 `.github/workflows/release-native.yml` builds each binary on its matching native
 GitHub-hosted x86-64 runner: Windows Server, macOS Intel, and Ubuntu. There is
 no cross-compilation, Zig, custom SDK, or Docker involved. Pushing a `vX.Y.Z`
 tag creates a GitHub Release containing the three dynamic libraries, C header,
-and checksums.
+and npm tarball. The Release is created first, and each native runner uploads
+its binary as soon as that build finishes.
 
-After publishing the GitHub Release, the native workflow dispatches the separate
+After all three native builds succeed, the native workflow dispatches the separate
 `.github/workflows/publish-npm.yml` workflow. It downloads those exact release
 binaries, assembles the precompiled module, publishes it to GitHub Packages
 through the repository `GITHUB_TOKEN`, and attaches the npm tarball back to the
-Release. It can also be rerun manually for an existing tag. The tag must match
+Release.
+
+Both workflows are independently runnable from GitHub Actions. A manual native
+run accepts a release tag and one component: `prepare`, `windows`, `macos`,
+`linux`, or `all`. The npm workflow accepts an existing complete release tag,
+so a failed publication can be retried without rebuilding native libraries.
+Package versions are immutable once successfully published. The tag must match
 the Cargo version. ARM and musl are not release targets, and Linux consumers
 still need Tauri's GTK/WebKitGTK runtime libraries. No npmjs account, npm token,
 or repository secret is required for publishing.
