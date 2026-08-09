@@ -461,7 +461,6 @@ it, the example returns inline HTML instead.
 
 ```python
 import asyncio
-import contextlib
 import ctypes
 import itertools
 import json
@@ -570,14 +569,22 @@ def drain_once():
         handle_message(message)
 
 
-async def pump():
-    while True:
-        drain_once()                       # exactly one non-blocking GUI iteration
-        await asyncio.sleep(0.016)         # yield to asyncio's main-thread loop
-
-
 async def main():
-    pump_task = asyncio.create_task(pump())
+    loop = asyncio.get_running_loop()
+    stopped = loop.create_future()
+    timer = None
+
+    def drain_tick():
+        nonlocal timer
+        try:
+            drain_once()                   # one non-blocking GUI iteration
+        except BaseException as error:
+            if not stopped.done():
+                stopped.set_exception(error)
+        else:
+            timer = loop.call_later(0.016, drain_tick)
+
+    timer = loop.call_soon(drain_tick)
     try:
         await request(
             "plugin:webview|create_webview_window",
@@ -588,11 +595,10 @@ async def main():
                 "visible": True,
             }},
         )
-        await asyncio.Event().wait()       # application work continues here
+        await stopped                      # application work continues here
     finally:
-        pump_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await pump_task
+        if timer is not None:
+            timer.cancel()
         check(lib.tauriless_destroy(handle), "destroy")
 
 
@@ -602,8 +608,8 @@ asyncio.run(main())
 `ctypes.string_at()` performs the required synchronous copy of the borrowed
 drain buffer. Do not call Tauriless through `asyncio.to_thread()` or an executor:
 creation, send, drain, and destruction of one runtime must all remain on the
-main OS thread. `asyncio.sleep()` only suspends the coroutine, so the rest of the
-Python event loop continues to run between GUI iterations.
+main OS thread. `loop.call_later()` schedules one 16 ms timer callback at a time,
+so the rest of the Python event loop continues to run between GUI iterations.
 
 ## Code running in a webview
 
