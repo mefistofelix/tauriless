@@ -1,0 +1,75 @@
+name: Publish npm package
+
+on:
+  repository_dispatch:
+    types: [npm-publish]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing native GitHub Release tag to publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    name: Assemble and publish precompiled module
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.client_payload.tag || inputs.tag }}
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "26"
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      - name: Download release binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          crate_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' tauriless/Cargo.toml | head -n1)
+          if [[ "$version" != "$crate_version" ]]; then
+            echo "Release $RELEASE_TAG does not match Cargo version $crate_version" >&2
+            exit 1
+          fi
+
+          mkdir .downloads
+          gh release download "$RELEASE_TAG" --dir .downloads \
+            --pattern "tauriless-v${version}-windows-x64.dll" \
+            --pattern "tauriless-v${version}-macos-x64.dylib" \
+            --pattern "tauriless-v${version}-linux-x64.so"
+
+          install -Dm755 ".downloads/tauriless-v${version}-windows-x64.dll" \
+            npm/native/win32-x64/tauriless.dll
+          install -Dm755 ".downloads/tauriless-v${version}-macos-x64.dylib" \
+            npm/native/darwin-x64/libtauriless.dylib
+          install -Dm755 ".downloads/tauriless-v${version}-linux-x64.so" \
+            npm/native/linux-x64/libtauriless.so
+          npm pkg set version="$version" --prefix npm
+
+      - name: Pack npm tarball
+        working-directory: npm
+        run: npm pack
+
+      - name: Publish to npm
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Attach npm tarball to GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.client_payload.tag || inputs.tag }}
+        run: gh release upload "$RELEASE_TAG" npm/*.tgz --clobber

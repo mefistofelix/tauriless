@@ -1,0 +1,127 @@
+name: Release native binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: Windows x64 release
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-windows-x64
+          path: tauriless/target/release/tauriless.dll
+          if-no-files-found: error
+
+  macos:
+    name: macOS Intel release
+    runs-on: macos-15-intel
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-macos-x64
+          path: tauriless/target/release/libtauriless.dylib
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64 release
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Tauri dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+      - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
+      - uses: actions/upload-artifact@v7
+        with:
+          name: native-linux-x64
+          path: tauriless/target/release/libtauriless.so
+          if-no-files-found: error
+
+  github-release:
+    name: Create GitHub release
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check tag and crate version
+        id: release
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          crate_version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' tauriless/Cargo.toml | head -n1)
+          if [[ "$version" != "$crate_version" ]]; then
+            echo "Tag $GITHUB_REF_NAME does not match Cargo version $crate_version" >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-windows-x64
+          path: .artifacts/windows
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-macos-x64
+          path: .artifacts/macos
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: native-linux-x64
+          path: .artifacts/linux
+
+      - name: Assemble release assets
+        shell: bash
+        run: |
+          version='${{ steps.release.outputs.version }}'
+          mkdir .release
+          cp .artifacts/windows/tauriless.dll ".release/tauriless-v${version}-windows-x64.dll"
+          cp .artifacts/macos/libtauriless.dylib ".release/tauriless-v${version}-macos-x64.dylib"
+          cp .artifacts/linux/libtauriless.so ".release/tauriless-v${version}-linux-x64.so"
+          cp tauriless/include/tauriless.h ".release/tauriless-v${version}.h"
+          (cd .release && sha256sum * > SHA256SUMS)
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" .release/* \
+            --verify-tag \
+            --title "Tauriless $GITHUB_REF_NAME" \
+            --generate-notes
+
+      - name: Request npm publication
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "repos/$GITHUB_REPOSITORY/dispatches" \
+            -f event_type=npm-publish \
+            -f "client_payload[tag]=$GITHUB_REF_NAME"

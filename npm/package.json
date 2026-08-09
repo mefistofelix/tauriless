@@ -1,0 +1,41 @@
+{
+  "name": "tauriless",
+  "version": "0.1.0",
+  "description": "A manually-pumped Tauri runtime exposed through a minimal C ABI",
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./native-path": "./native-path.js"
+  },
+  "types": "./index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "native-path.js",
+    "native"
+  ],
+  "engines": {
+    "node": ">=26.1.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "keywords": [
+    "tauri",
+    "ffi",
+    "gui",
+    "rust"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mefistofelix/tauriless.git"
+  },
+  "homepage": "https://github.com/mefistofelix/tauriless#readme",
+  "bugs": "https://github.com/mefistofelix/tauriless/issues",
+  "license": "MIT OR Apache-2.0"
+}

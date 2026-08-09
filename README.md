@@ -7,6 +7,10 @@ one non-blocking Tauri event-loop iteration approximately every 16 ms.
 This is a first C-ABI prototype. It deliberately has no N-API layer and no
 second callback or resource abstraction.
 
+Node-API is not required. Node.js 26.1 added the experimental built-in
+`node:ffi` module, so the npm package loads this same C ABI directly. Node must
+currently be started with `--experimental-ffi`.
+
 ## Architecture
 
 The exported surface is intentionally small:
@@ -18,12 +22,12 @@ tauriless_drain(runtime, &batch);
 tauriless_destroy(runtime);
 ```
 
-Tauriless starts with one invisible native carrier `Window`, but creates no
-WebView2 instance. A focused patch to Tauri represents that window as a logical
-headless `Webview`, so `tauriless_send` can always reuse Tauri's own
-`Webview::on_message` dispatcher, ACL, plugin commands, resource table, invoke
-responses, and channels. Commands that create real windows and webviews are not
-special-cased by Tauriless.
+Tauriless starts with no window or webview and uses the unmodified Tauri crate.
+The first request must be `plugin:webview|create_webview_window`; the bridge
+deserializes its upstream `WindowConfig` payload and calls
+`WebviewWindowBuilder::from_config(...).build()`. Once a real webview exists,
+all requests reuse Tauri's own `Webview::on_message` dispatcher, ACL, plugin
+commands, resource table, invoke responses, and channels.
 
 `tauriless_drain` performs exactly one `App::run_iteration`, collects completed
 IPC responses, Tauri events, and Tauri channel messages, and returns one UTF-8
@@ -46,7 +50,6 @@ lives in `tauriless/`. Install the requested toolchain from the workspace root:
 Build the crate from the workspace root inside the MSVC environment:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tauriless\prepare-tauri.ps1
 cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
 ```
 
@@ -73,11 +76,16 @@ A request uses upstream Tauri command names and payload shapes. For example:
 }
 ```
 
-`webview` selects the source dispatcher context. It defaults to the internal
-`__tauriless` headless context; a real webview label may be supplied explicitly.
+With no existing webview, the command above is the only accepted request. Its
+options are passed to Tauri's standard `WebviewWindowBuilder`, and its result is
+returned by a later drain.
+
+After creation, `webview` selects a stable `WebviewWindow` source context; child
+webviews are intentionally ignored. If omitted, the only existing webview
+window is used; with several, `main` is preferred. If several exist and none is
+named `main`, the request fails and the caller must provide a label explicitly.
 `method`, `params`, and `target` are accepted as aliases for `cmd`, `payload`,
-and `webview`. The command above therefore reaches Tauri's standard webview
-plugin and its result is returned by a later drain.
+and `webview`.
 
 Persistent callbacks use Tauri's normal `Channel<T>` payload. The bridge
 intercepts every already serialized channel delivery before it reaches
@@ -163,6 +171,37 @@ recognizes executables under `target/debug` as development applications and
 does not require an installed Windows AppUserModelID. Use **Esci** in the tray
 menu or `Ctrl+C` to shut the runtime down.
 
+## npm package and cross-platform release
+
+The `npm/` package contains a small ESM loader for Node's built-in FFI and no
+native addon. A release contains these x86-64 dynamic libraries in one tarball:
+
+- `native/win32-x64/tauriless.dll`
+- `native/darwin-x64/libtauriless.dylib`
+- `native/linux-x64/libtauriless.so`
+
+Use it with Node 26.1 or newer:
+
+```console
+node --experimental-ffi app.mjs
+```
+
+`.github/workflows/release-native.yml` builds each binary on its matching native
+GitHub-hosted x86-64 runner: Windows Server, macOS Intel, and Ubuntu. There is no
+cross-compilation, Zig, custom SDK, or Docker involved. Pushing a `vX.Y.Z` tag
+creates a GitHub Release containing the three dynamic libraries, C header, and
+checksums.
+
+After publishing the GitHub Release, the native workflow dispatches the
+separate `.github/workflows/publish-npm.yml` workflow. It downloads those exact
+release binaries, assembles the precompiled module, publishes it to npm, and
+attaches the npm tarball back to the Release. It can also be rerun manually for
+an existing tag. The tag must match the Cargo version. ARM and musl are not
+release targets, and Linux consumers still need Tauri's GTK/WebKitGTK runtime
+libraries. The first npm publication needs an `NPM_TOKEN` repository secret;
+afterward npm trusted publishing can use `publish-npm.yml` and its GitHub OIDC
+identity.
+
 ## Code running in a webview
 
 Tauriless injects no JavaScript. Code in a webview uses the standard Tauri IPC
@@ -198,23 +237,9 @@ can reach operating-system functionality. Tighten
 `tauriless/capabilities/default.json` before using Tauriless outside a
 trusted embedding environment.
 
-## Focused Tauri patch
-
-The repository stores only the focused Tauri 2.11.5 patch kit under
-`tauriless/patches/tauri-2.11.5`. Running `tauriless/prepare-tauri.ps1` creates
-the ignored `tauriless/vendor/tauri` working copy; the `[patch.crates-io]` entry
-then makes ordinary Cargo commands use it. WRY and `tauri-runtime-wry` are
-unmodified.
-
-The upstream delta is isolated to `tauri/src/webview`: one new
-`headless.rs` file implements the real-or-headless dispatcher and the hidden
-unstable `Webview::new_headless` constructor. `mod.rs` only declares that module,
-stores its internal wrapper, and converts real runtime webviews into it. This
-keeps rebasing the change onto a later pinned Tauri version mechanical.
-
 ## Versioning note
 
 The bridge uses Tauri's public `Webview::on_message`/`InvokeRequest` path to
 avoid recreating its IPC and resource machinery. Tauri documents this surface
-as not yet stable, so upgrades must be explicit, the focused patch must be
-rebased, and the end-to-end demo must be retested.
+as not yet stable, so the workspace pins the unmodified crates.io Tauri 2.11.5
+release; upgrades must be explicit and the end-to-end demo must be retested.

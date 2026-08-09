@@ -18,9 +18,9 @@ use serde_json::{json, Value};
 use tauri::{
     http::HeaderMap,
     ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody, OwnedInvokeResponder},
+    utils::config::WindowConfig,
     webview::InvokeRequest,
-    window::WindowBuilder,
-    EventId, Listener, Manager, RunEvent, Webview,
+    EventId, Listener, Manager, RunEvent, Webview, WebviewWindow, WebviewWindowBuilder,
 };
 use thiserror::Error;
 
@@ -40,7 +40,7 @@ const NATIVE_EVENT_NAMES: &[&str] = &[
     "tauri://suspended",
     "tauri://resumed",
 ];
-const HEADLESS_LABEL: &str = "__tauriless";
+const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
 
 type Outbox = Arc<Mutex<Vec<Value>>>;
 type WindowListeners = Arc<Mutex<HashMap<String, Vec<EventId>>>>;
@@ -74,10 +74,14 @@ struct Request {
     webview: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreateWebviewWindowPayload {
+    options: WindowConfig,
+}
+
 /// The single opaque object held by foreign-language hosts.
 pub struct Tauriless {
     app: Option<tauri::App>,
-    headless: Option<Webview>,
     owner: ThreadId,
     outbox: Outbox,
     draining: bool,
@@ -110,23 +114,14 @@ impl Tauriless {
             })
             .build(tauri::generate_context!())?;
 
-        // Run setup once, then create a native carrier window without WebView2.
+        // Complete Tauri setup without creating a bootstrap window or webview.
         let mut app = app;
         let setup_outbox = Arc::clone(&outbox);
         #[allow(deprecated)]
         app.run_iteration(move |_app, event| collect_event(&setup_outbox, event));
 
-        let carrier = WindowBuilder::new(app.handle(), HEADLESS_LABEL)
-            .visible(false)
-            .skip_taskbar(true)
-            .decorations(false)
-            .inner_size(1.0, 1.0)
-            .build()?;
-        let headless = Webview::new_headless(carrier, HEADLESS_LABEL);
-
         Ok(Self {
             app: Some(app),
-            headless: Some(headless),
             owner: thread::current().id(),
             outbox,
             draining: false,
@@ -140,13 +135,13 @@ impl Tauriless {
         self.check_running()?;
         let request: Request = serde_json::from_slice(bytes)?;
         validate(&request)?;
-        let webview = match request.webview.as_deref() {
-            Some(HEADLESS_LABEL) | None => self.headless.as_ref().cloned().ok_or(Error::Shutdown),
-            Some(label) => self
-                .app()?
-                .get_webview(label)
-                .ok_or_else(|| Error::Request(format!("unknown webview `{label}`"))),
-        }?;
+
+        let webviews = self.app()?.webview_windows();
+        if webviews.is_empty() {
+            return self.create_first_webview(request);
+        }
+
+        let webview = select_webview(webviews, request.webview.as_deref())?;
         let url = webview.url()?;
         let invoke_key = self.app()?.handle().invoke_key().to_owned();
         let outbox = Arc::clone(&self.outbox);
@@ -193,7 +188,6 @@ impl Tauriless {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.check_thread()?;
-        self.headless.take();
         if let Some(app) = self.app.take() {
             app.cleanup_before_exit();
         }
@@ -202,6 +196,23 @@ impl Tauriless {
 
     fn app(&self) -> Result<&tauri::App> {
         self.app.as_ref().ok_or(Error::Shutdown)
+    }
+
+    fn create_first_webview(&self, request: Request) -> Result<()> {
+        require_initial_create_command(&request)?;
+
+        let app = self.app()?;
+        let outcome = serde_json::from_value::<CreateWebviewWindowPayload>(request.payload)
+            .map_err(|error| error.to_string())
+            .and_then(|payload| {
+                WebviewWindowBuilder::from_config(app.handle(), &payload.options)
+                    .and_then(|builder| builder.build())
+                    .map(|_| Value::Null)
+                    .map_err(|error| error.to_string())
+            });
+
+        result(&self.outbox, request.id, outcome.map_err(Value::String));
+        Ok(())
     }
 
     fn check_thread(&self) -> Result<()> {
@@ -214,6 +225,48 @@ impl Tauriless {
 
     fn check_running(&self) -> Result<()> {
         self.app.as_ref().map(|_| ()).ok_or(Error::Shutdown)
+    }
+}
+
+fn require_initial_create_command(request: &Request) -> Result<()> {
+    if request.cmd == CREATE_WEBVIEW_WINDOW_COMMAND {
+        Ok(())
+    } else {
+        Err(Error::Request(format!(
+            "no webview exists; the first command must be `{CREATE_WEBVIEW_WINDOW_COMMAND}`"
+        )))
+    }
+}
+
+fn select_webview(
+    mut webviews: HashMap<String, WebviewWindow>,
+    requested: Option<&str>,
+) -> Result<Webview> {
+    if let Some(label) = requested {
+        return webviews
+            .remove(label)
+            .map(|webview_window| webview_window.as_ref().clone())
+            .ok_or_else(|| Error::Request(format!("unknown webview `{label}`")));
+    }
+
+    let label = choose_default_webview_label(webviews.keys().cloned().collect())?;
+    Ok(webviews
+        .remove(&label)
+        .expect("the selected webview label came from the same map")
+        .as_ref()
+        .clone())
+}
+
+fn choose_default_webview_label(mut labels: Vec<String>) -> Result<String> {
+    labels.sort();
+    match labels.as_slice() {
+        [label] => Ok(label.clone()),
+        labels if labels.iter().any(|label| label == "main") => Ok("main".into()),
+        [] => Err(Error::Request("no webview exists".into())),
+        _ => Err(Error::Request(format!(
+            "multiple webviews exist ({labels}); set `webview` explicitly",
+            labels = labels.join(", ")
+        ))),
     }
 }
 
@@ -282,9 +335,6 @@ fn event_forwarder(outbox: Outbox) -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("tauriless-events")
         .on_window_ready(move |window| {
             let label = window.label().to_owned();
-            if label == HEADLESS_LABEL {
-                return;
-            }
             let ids = forward_native_events(&window, &window_outbox, "window", &label);
             pending_window_listeners
                 .lock()
@@ -517,7 +567,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn request_does_not_require_a_bootstrap_webview_label() {
+    fn request_may_omit_a_webview_label() {
         let request: Request =
             serde_json::from_str(r#"{"id":1,"cmd":"plugin:app|name","payload":{}}"#).unwrap();
         assert!(request.webview.is_none());
@@ -535,5 +585,36 @@ mod tests {
         let request: Request =
             serde_json::from_str(r#"{"id":null,"cmd":"plugin:app|name"}"#).unwrap();
         assert!(validate(&request).is_err());
+    }
+
+    #[test]
+    fn default_webview_selection_is_deterministic() {
+        assert_eq!(
+            choose_default_webview_label(vec!["only".into()]).unwrap(),
+            "only"
+        );
+        assert_eq!(
+            choose_default_webview_label(vec!["secondary".into(), "main".into()]).unwrap(),
+            "main"
+        );
+
+        let error = choose_default_webview_label(vec!["zeta".into(), "alpha".into()]).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "invalid request: multiple webviews exist (alpha, zeta); set `webview` explicitly"
+        );
+    }
+
+    #[test]
+    fn only_webview_window_creation_is_allowed_without_a_context() {
+        let rejected: Request =
+            serde_json::from_str(r#"{"id":1,"cmd":"plugin:app|name","payload":{}}"#).unwrap();
+        assert!(require_initial_create_command(&rejected).is_err());
+
+        let accepted: Request = serde_json::from_str(
+            r#"{"id":1,"cmd":"plugin:webview|create_webview_window","payload":{"options":{"label":"main"}}}"#,
+        )
+        .unwrap();
+        require_initial_create_command(&accepted).unwrap();
     }
 }
