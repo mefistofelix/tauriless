@@ -19,31 +19,11 @@ use tauri::{
     http::HeaderMap,
     ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody, OwnedInvokeResponder},
     webview::InvokeRequest,
-    EventId, Listener, Manager, RunEvent,
+    window::WindowBuilder,
+    EventId, Listener, Manager, RunEvent, Webview,
 };
 use thiserror::Error;
 
-const BRIDGE_SCRIPT: &str = r#"
-;(() => {
-  if (window.__TAURILESS__) return;
-  const send = async json => {
-    const request = typeof json === "string" ? JSON.parse(json) : json;
-    const command = request.cmd ?? request.method;
-    const payload = request.payload ?? request.params ?? {};
-    return window.__TAURI_INTERNALS__.invoke(command, payload);
-  };
-  Object.defineProperty(window, "__TAURILESS__", {
-    value: Object.freeze({
-      send,
-      emit(event, payload = null) {
-        return window.__TAURI_INTERNALS__.invoke("tauriless:event", { event, payload });
-      }
-    })
-  });
-  Object.defineProperty(window, "tauriless_send", { value: send });
-})();
-"#;
-const BOOTSTRAP_LABEL: &str = "__tauriless";
 const NATIVE_EVENT_NAMES: &[&str] = &[
     "tauri://resize",
     "tauri://move",
@@ -60,6 +40,7 @@ const NATIVE_EVENT_NAMES: &[&str] = &[
     "tauri://suspended",
     "tauri://resumed",
 ];
+const HEADLESS_LABEL: &str = "__tauriless";
 
 type Outbox = Arc<Mutex<Vec<Value>>>;
 type WindowListeners = Arc<Mutex<HashMap<String, Vec<EventId>>>>;
@@ -89,17 +70,14 @@ struct Request {
     cmd: String,
     #[serde(default, alias = "params")]
     payload: Value,
-    #[serde(default = "bootstrap_label", alias = "target")]
-    webview: String,
-}
-
-fn bootstrap_label() -> String {
-    BOOTSTRAP_LABEL.into()
+    #[serde(default, alias = "target")]
+    webview: Option<String>,
 }
 
 /// The single opaque object held by foreign-language hosts.
 pub struct Tauriless {
     app: Option<tauri::App>,
+    headless: Option<Webview>,
     owner: ThreadId,
     outbox: Outbox,
     draining: bool,
@@ -110,18 +88,12 @@ impl Tauriless {
         let outbox = Outbox::default();
         let event_plugin = event_forwarder(Arc::clone(&outbox));
         let channel_outbox = Arc::clone(&outbox);
-        let ipc_outbox = Arc::clone(&outbox);
         let app = tauri::Builder::default()
             .plugin(event_plugin)
             .plugin(tauri_plugin_notification::init())
             .plugin(tauri_plugin_opener::init())
             .plugin(tauri_plugin_os::init())
             .channel_interceptor(move |webview, callback, index, body| {
-                // The hidden webview is the C bridge's dedicated IPC context.
-                // Leave channels created by real webview JavaScript untouched.
-                if webview.label() != BOOTSTRAP_LABEL {
-                    return false;
-                }
                 push(
                     &channel_outbox,
                     json!({
@@ -132,41 +104,29 @@ impl Tauriless {
                       "message": response_body(body)
                     }),
                 );
-                true
-            })
-            .append_invoke_initialization_script(BRIDGE_SCRIPT)
-            .invoke_handler(move |invoke| {
-                if invoke.message.command() != "tauriless:event" {
-                    return false;
-                }
-                let body = match invoke.message.payload() {
-                    InvokeBody::Json(value) => value.clone(),
-                    InvokeBody::Raw(bytes) => json!({ "bytes": bytes }),
-                };
-                push(
-                    &ipc_outbox,
-                    json!({
-                      "kind": "event",
-                      "source": "webview",
-                      "window": invoke.message.webview_ref().label(),
-                      "event": body.get("event").cloned().unwrap_or(Value::Null),
-                      "payload": body.get("payload").cloned().unwrap_or(Value::Null)
-                    }),
-                );
-                invoke.resolver.resolve(());
+                // This experiment routes every Tauri Channel<T> to the host.
+                // Returning true prevents the normal JavaScript delivery.
                 true
             })
             .build(tauri::generate_context!())?;
 
-        // Tauri installs its built-in plugins and creates the hidden IPC
-        // webview during setup, which runs on the first non-blocking turn.
+        // Run setup once, then create a native carrier window without WebView2.
         let mut app = app;
         let setup_outbox = Arc::clone(&outbox);
         #[allow(deprecated)]
         app.run_iteration(move |_app, event| collect_event(&setup_outbox, event));
 
+        let carrier = WindowBuilder::new(app.handle(), HEADLESS_LABEL)
+            .visible(false)
+            .skip_taskbar(true)
+            .decorations(false)
+            .inner_size(1.0, 1.0)
+            .build()?;
+        let headless = Webview::new_headless(carrier, HEADLESS_LABEL);
+
         Ok(Self {
             app: Some(app),
+            headless: Some(headless),
             owner: thread::current().id(),
             outbox,
             draining: false,
@@ -180,10 +140,13 @@ impl Tauriless {
         self.check_running()?;
         let request: Request = serde_json::from_slice(bytes)?;
         validate(&request)?;
-        let webview = self
-            .app()?
-            .get_webview_window(&request.webview)
-            .ok_or_else(|| Error::Request(format!("unknown webview `{}`", request.webview)))?;
+        let webview = match request.webview.as_deref() {
+            Some(HEADLESS_LABEL) | None => self.headless.as_ref().cloned().ok_or(Error::Shutdown),
+            Some(label) => self
+                .app()?
+                .get_webview(label)
+                .ok_or_else(|| Error::Request(format!("unknown webview `{label}`"))),
+        }?;
         let url = webview.url()?;
         let invoke_key = self.app()?.handle().invoke_key().to_owned();
         let outbox = Arc::clone(&self.outbox);
@@ -230,6 +193,7 @@ impl Tauriless {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.check_thread()?;
+        self.headless.take();
         if let Some(app) = self.app.take() {
             app.cleanup_before_exit();
         }
@@ -268,8 +232,10 @@ fn validate(request: &Request) -> Result<()> {
     if !request.id.is_string() && !request.id.is_number() {
         return Err(Error::Request("id must be a string or number".into()));
     }
-    if request.webview.is_empty() {
-        return Err(Error::Request("webview must not be empty".into()));
+    if request.webview.as_deref() == Some("") {
+        return Err(Error::Request(
+            "webview must not be empty when provided".into(),
+        ));
     }
     Ok(())
 }
@@ -316,7 +282,7 @@ fn event_forwarder(outbox: Outbox) -> tauri::plugin::TauriPlugin<tauri::Wry> {
     tauri::plugin::Builder::new("tauriless-events")
         .on_window_ready(move |window| {
             let label = window.label().to_owned();
-            if label == BOOTSTRAP_LABEL {
+            if label == HEADLESS_LABEL {
                 return;
             }
             let ids = forward_native_events(&window, &window_outbox, "window", &label);
@@ -327,10 +293,6 @@ fn event_forwarder(outbox: Outbox) -> tauri::plugin::TauriPlugin<tauri::Wry> {
         })
         .on_webview_ready(move |webview| {
             let label = webview.label().to_owned();
-            if label == BOOTSTRAP_LABEL {
-                return;
-            }
-
             // A WebviewWindow is first announced as a Window and then as a
             // Webview. Replace the temporary Window listeners with one
             // WebviewWindow target so Tauri's AnyLabel events are not doubled.
@@ -555,8 +517,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bridge_script_is_safe_to_append_to_tauri_ipc_script() {
-        assert!(BRIDGE_SCRIPT.trim_start().starts_with(';'));
+    fn request_does_not_require_a_bootstrap_webview_label() {
+        let request: Request =
+            serde_json::from_str(r#"{"id":1,"cmd":"plugin:app|name","payload":{}}"#).unwrap();
+        assert!(request.webview.is_none());
     }
 
     #[test]

@@ -23,13 +23,19 @@ the C ABI directly; Node may receive a thin N-API adapter later.
 - Do not implement a compatibility layer for `@tauri-apps/api`. It is available
   only insofar as the standard Tauri Builder and plugins provide it for free.
   Never replace `window.__TAURI_INTERNALS__` or duplicate built-in core plugins.
+- Do not create a bootstrap WebView2 instance or inject a Tauriless JavaScript
+  bridge. A hidden native `Window` plus Tauri's focused headless-Webview patch
+  provides the standard invoke context, resource table and channel plumbing
+  without constructing a platform webview.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
-  native Tauri command names and payloads. Do not reimplement window, webview,
-  tray, menu, notification, opener, or resource operations in this bridge.
-- The hidden `__tauriless` webview is the default IPC context for host calls;
-  it is a normal Tauri-configured webview, not a second resource manager.
-- The only custom application command is `tauriless:event`, used to forward a
-  webview event to the embedding host.
+  native Tauri command names and payloads. Requests without an explicit real
+  webview label use the persistent `__tauriless` headless context; do not
+  special-case plugin commands or duplicate their implementations.
+- Intercept every Tauri `Channel<T>` delivery into the drain outbox and consume
+  it before JavaScript delivery. This experimental behavior intentionally also
+  applies to channels created by code inside real webviews.
+- Do not add custom application commands or reimplement window, tray, menu,
+  notification, opener, or resource operations in this bridge.
 - Return asynchronous results and events from `tauriless_drain`; never call a
   foreign-language callback from Rust.
 - Do not add dependency scheduling or readiness queues. A host that creates a
@@ -38,8 +44,11 @@ the C ABI directly; Node may receive a thin N-API adapter later.
 - No background GUI thread. This would violate macOS main-thread requirements
   and would not solve JavaScript main-thread callback affinity.
 - All exported C functions must prevent Rust panics from crossing the ABI.
-- Any upstream Tauri modification requires a written rationale and a focused
-  patch; none is expected for the initial prototype.
+- Keep the upstream Tauri modification isolated in the committed patch kit
+  under `tauriless/patches/tauri-2.11.5`: a generic real-or-headless dispatcher
+  wrapper in `headless.rs` and only the minimal `webview/mod.rs` patch. The
+  prepared `vendor/tauri` working copy is ignored; never commit the complete
+  upstream crate. Do not patch WRY.
 
 ## Toolchain
 

@@ -67,9 +67,11 @@ function checkStatus(operation, status) {
   if (status !== 0) throw new Error(`${operation} failed (${status}): ${lastError()}`);
 }
 
-function request(cmd, payload = {}, webview = "__tauriless") {
+function request(cmd, payload = {}, webview) {
   const id = nextId++;
-  const bytes = encoder.encode(JSON.stringify({ id, cmd, payload, webview }));
+  const request = { id, cmd, payload };
+  if (webview !== undefined) request.webview = webview;
+  const bytes = encoder.encode(JSON.stringify(request));
 
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject, cmd });
@@ -219,33 +221,24 @@ const WEBVIEW_HTML = `<!doctype html>
       addEventListener(name, event => { event.preventDefault(); drop.classList.remove('over'); });
     }
 
-    const emitHost = (event, payload) => window.__TAURILESS__?.emit
-      ? window.__TAURILESS__.emit(event, payload)
-      : Promise.resolve();
-    status.textContent = typeof window.tauriless_send === 'function'
-      ? 'Bridge Tauriless pronto.'
-      : 'Bridge Tauriless non disponibile.';
+    const invoke = (command, payload = {}) =>
+      window.__TAURI_INTERNALS__.invoke(command, payload);
+    status.textContent = window.__TAURI_INTERNALS__?.invoke
+      ? 'IPC Tauri standard pronto.'
+      : 'IPC Tauri non disponibile.';
 
     document.querySelector('#notify').addEventListener('click', async () => {
       const text = document.querySelector('#message').value.trim();
       if (!text) { status.textContent = 'Inserisci un messaggio.'; return; }
       status.textContent = 'Invio…';
       try {
-        await window.tauriless_send({
-          cmd: 'plugin:notification|notify',
-          payload: { options: { title: 'Dalla webview Tauriless', body: text } }
+        await invoke('plugin:notification|notify', {
+          options: { title: 'Dalla webview Tauriless', body: text }
         });
-        await emitHost('custom-notification', { text, ok: true });
         status.textContent = 'Notifica inviata.';
       } catch (error) {
-        await emitHost('custom-notification', { text, ok: false, error: String(error) });
         status.textContent = 'Errore: ' + error;
       }
-    });
-
-    emitHost('webview-ready', {
-      href: location.href,
-      bridge: typeof window.tauriless_send === 'function'
     });
   </script>
 </body>

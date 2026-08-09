@@ -12,9 +12,6 @@ fn main() {
     std::fs::create_dir_all(icon.parent().unwrap()).unwrap();
     std::fs::write(&icon, ICON).unwrap();
     let windows = tauri_build::WindowsAttributes::new().window_icon_path(icon);
-    let app = tauri_build::AppManifest::new().commands(&["tauriless:event"]);
-    let attributes = tauri_build::Attributes::new()
-        .windows_attributes(windows)
-        .app_manifest(app);
+    let attributes = tauri_build::Attributes::new().windows_attributes(windows);
     tauri_build::try_build(attributes).expect("failed to run tauri build script");
 }

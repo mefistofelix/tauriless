@@ -175,7 +175,6 @@
     "opener:default",
     "opener:allow-open-path",
     "os:default",
-    "os:allow-hostname",
-    "allow-bridge"
+    "os:allow-hostname"
   ]
 }

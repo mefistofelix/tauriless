@@ -6,6 +6,7 @@
 /rustup-init.exe
 /target/
 /tauriless/target/
+/tauriless/vendor/
 /tauriless/.deno/
 /tauriless/icons/
 /tauriless/gen/

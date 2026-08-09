@@ -5,7 +5,7 @@ small C ABI. The embedding process keeps ownership of its main thread and calls
 one non-blocking Tauri event-loop iteration approximately every 16 ms.
 
 This is a first C-ABI prototype. It deliberately has no N-API layer and no
-second window, webview, callback, or resource abstraction.
+second callback or resource abstraction.
 
 ## Architecture
 
@@ -18,10 +18,12 @@ tauriless_drain(runtime, &batch);
 tauriless_destroy(runtime);
 ```
 
-`tauriless_send` forwards a native Tauri command and payload to Tauri's own IPC
-dispatcher through a hidden, ordinary Tauri webview named `__tauriless`. Tauri
-therefore remains the only owner of its windows, webviews, tray icons, menus,
-resources, callback resolution, and ACL checks.
+Tauriless starts with one invisible native carrier `Window`, but creates no
+WebView2 instance. A focused patch to Tauri represents that window as a logical
+headless `Webview`, so `tauriless_send` can always reuse Tauri's own
+`Webview::on_message` dispatcher, ACL, plugin commands, resource table, invoke
+responses, and channels. Commands that create real windows and webviews are not
+special-cased by Tauriless.
 
 `tauriless_drain` performs exactly one `App::run_iteration`, collects completed
 IPC responses, Tauri events, and Tauri channel messages, and returns one UTF-8
@@ -44,6 +46,7 @@ lives in `tauriless/`. Install the requested toolchain from the workspace root:
 Build the crate from the workspace root inside the MSVC environment:
 
 ```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tauriless\prepare-tauri.ps1
 cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
 ```
 
@@ -53,48 +56,47 @@ header is [`tauriless/include/tauriless.h`](tauriless/include/tauriless.h), and
 
 ## Request and drain protocol
 
-A request uses upstream Tauri command names and upstream payload shapes:
+A request uses upstream Tauri command names and payload shapes. For example:
 
 ```json
 {
   "id": 1,
-  "cmd": "plugin:app|name",
-  "payload": {},
-  "webview": "__tauriless"
+  "cmd": "plugin:webview|create_webview_window",
+  "payload": {
+    "options": {
+      "label": "main",
+      "title": "Main",
+      "url": "index.html",
+      "visible": true
+    }
+  }
 }
 ```
 
-`webview` is optional and defaults to `__tauriless`; `method`, `params`, and
-`target` are accepted as aliases for `cmd`, `payload`, and `webview`.
+`webview` selects the source dispatcher context. It defaults to the internal
+`__tauriless` headless context; a real webview label may be supplied explicitly.
+`method`, `params`, and `target` are accepted as aliases for `cmd`, `payload`,
+and `webview`. The command above therefore reaches Tauri's standard webview
+plugin and its result is returned by a later drain.
 
-A later drain contains the correlated Tauri response without an additional
-result model:
-
-```json
-{
-  "messages": [
-    { "kind": "result", "id": 1, "ok": true, "value": "Tauriless" }
-  ]
-}
-```
-
-Persistent callbacks use Tauri's normal `Channel<T>` payload. When a command
-sent through the hidden IPC context contains a channel such as
-`"__CHANNEL__:9001"`, the bridge intercepts Tauri's already serialized channel
-delivery before it reaches JavaScript:
+Persistent callbacks use Tauri's normal `Channel<T>` payload. The bridge
+intercepts every already serialized channel delivery before it reaches
+JavaScript:
 
 ```json
 {
   "kind": "channel",
-  "webview": "__tauriless",
+  "webview": "main",
   "id": 9001,
   "index": 0,
   "message": "tray-show"
 }
 ```
 
-The interceptor applies only to the hidden bridge webview. Channels created by
-JavaScript in real webviews retain Tauri's standard behavior.
+The interceptor returns `true`, so intercepted channels are consumed and never
+delivered to JavaScript. This experimental rule also affects channels created
+by code inside real webviews; ordinary invoke promise results are separate and
+continue to resolve normally.
 
 Native window and webview events also reuse Tauri's Rust serialization and keep
 their upstream event names and payloads:
@@ -112,26 +114,7 @@ their upstream event names and payloads:
 }
 ```
 
-For example, the native Tauri webview command can create a window:
-
-```json
-{
-  "id": 2,
-  "cmd": "plugin:webview|create_webview_window",
-  "payload": {
-    "options": {
-      "label": "main",
-      "title": "Main",
-      "url": "index.html",
-      "visible": true
-    }
-  }
-}
-```
-
-There is no dependency scheduler in the bridge. Before sending another command
-that addresses `main`, the host must observe the successful result for `id: 2`
-in `tauriless_drain`. The same rule applies to Tauri resource IDs.
+There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
 For binary Tauri responses, `value` is represented as `{ "bytes": [...] }`.
 Buffers returned by `tauriless_drain` or `tauriless_last_error` belong to the
@@ -163,9 +146,8 @@ the fragment of the built-in app URL to the generic
 it uses no web server, separate demo page, or external JavaScript dependencies.
 Keeping a real app URL is important on WebView2 because WRY 0.55.1 cannot parse
 the empty IPC source reported for a top-level `data:` document. The demo creates
-a webview and a tray menu, reports native drag/drop paths to Deno, sends OS
-notifications, and receives Tauri's serialized native events and plugin
-channels through `tauriless_drain`.
+the real webview through `tauriless_send`, then creates its menu and tray through
+the same generic path.
 
 From the workspace root, build the DLL, copy the supplied Deno executable beside
 the debug DLL, and run the demo:
@@ -183,25 +165,17 @@ menu or `Ctrl+C` to shut the runtime down.
 
 ## Code running in a webview
 
-Tauriless injects only this convenience entry point:
+Tauriless injects no JavaScript. Code in a webview uses the standard Tauri IPC
+surface already installed by Tauri, directly or through the upstream JS API:
 
 ```js
-await window.tauriless_send({
-  cmd: "plugin:app|name",
-  payload: {}
-});
+await window.__TAURI_INTERNALS__.invoke("plugin:app|name", {});
 ```
-
-It is a direct JavaScript call to Tauri's existing
-`window.__TAURI_INTERNALS__.invoke`; it has no extra Rust dispatcher.
 
 There is intentionally no Tauriless implementation or compatibility promise
 for `@tauri-apps/api`. Standard Tauri APIs can be used inside a webview only to
 the extent that the selected upstream Tauri version and plugins already provide
 them. Tauriless neither replaces `__TAURI_INTERNALS__` nor mirrors those APIs.
-
-`window.__TAURILESS__.emit(event, payload)` is the only custom application IPC
-command. It forwards an application event to the external host's next drain.
 
 ## Included Tauri functionality
 
@@ -224,9 +198,23 @@ can reach operating-system functionality. Tighten
 `tauriless/capabilities/default.json` before using Tauriless outside a
 trusted embedding environment.
 
+## Focused Tauri patch
+
+The repository stores only the focused Tauri 2.11.5 patch kit under
+`tauriless/patches/tauri-2.11.5`. Running `tauriless/prepare-tauri.ps1` creates
+the ignored `tauriless/vendor/tauri` working copy; the `[patch.crates-io]` entry
+then makes ordinary Cargo commands use it. WRY and `tauri-runtime-wry` are
+unmodified.
+
+The upstream delta is isolated to `tauri/src/webview`: one new
+`headless.rs` file implements the real-or-headless dispatcher and the hidden
+unstable `Webview::new_headless` constructor. `mod.rs` only declares that module,
+stores its internal wrapper, and converts real runtime webviews into it. This
+keeps rebasing the change onto a later pinned Tauri version mechanical.
+
 ## Versioning note
 
 The bridge uses Tauri's public `Webview::on_message`/`InvokeRequest` path to
 avoid recreating its IPC and resource machinery. Tauri documents this surface
-as not yet stable, so the workspace pins Tauri exactly to `2.11.5`; upgrades
-must be explicit and retested.
+as not yet stable, so upgrades must be explicit, the focused patch must be
+rebased, and the end-to-end demo must be retested.

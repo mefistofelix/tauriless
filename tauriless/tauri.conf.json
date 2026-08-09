@@ -7,15 +7,7 @@
     "frontendDist": "assets"
   },
   "app": {
-    "windows": [
-      {
-        "label": "__tauriless",
-        "title": "Tauriless IPC",
-        "url": "index.html",
-        "visible": false,
-        "skipTaskbar": true
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
