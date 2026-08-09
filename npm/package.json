@@ -1,5 +1,5 @@
 {
-  "name": "tauriless",
+  "name": "@mefistofelix/tauriless",
   "version": "0.1.0",
   "description": "A manually-pumped Tauri runtime exposed through a minimal C ABI",
   "type": "module",
@@ -33,7 +33,10 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mefistofelix/tauriless.git"
+    "url": "https://github.com/mefistofelix/tauriless.git"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
   },
   "homepage": "https://github.com/mefistofelix/tauriless#readme",
   "bugs": "https://github.com/mefistofelix/tauriless/issues",

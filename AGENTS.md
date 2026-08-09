@@ -25,14 +25,14 @@ experimental `node:ffi` module.
   Never replace `window.__TAURI_INTERNALS__` or duplicate built-in core plugins.
 - Do not create a bootstrap WebView2 instance or inject a Tauriless JavaScript
   bridge. Start with no window or webview.
-- With no webview, accept only `plugin:webview|create_webview_window`, deserialize
-  its upstream `WindowConfig`, and build it with Tauri's public
+- With no webview, accept only `plugin:webview|create_webview_window`,
+  deserialize its upstream `WindowConfig`, and build it with Tauri's public
   `WebviewWindowBuilder`. This is the bridge's only special-cased command.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted
-  source label selects the sole webview window, then `main` if several exist;
-  if several exist without `main`, require an explicit label.
+  source label selects the sole webview window, then `main` if several exist; if
+  several exist without `main`, require an explicit label.
 - Intercept every Tauri `Channel<T>` delivery into the drain outbox and consume
   it before JavaScript delivery. This experimental behavior intentionally also
   applies to channels created by code inside real webviews.
@@ -52,6 +52,8 @@ experimental `node:ffi` module.
 
 - The npm package ships the same C-ABI dynamic library; it must not introduce a
   Node-API addon or a second Rust bridge.
+- Publish it to GitHub Packages as `@mefistofelix/tauriless`. The publishing
+  workflow must use the repository `GITHUB_TOKEN`, not an npmjs token.
 - Supported release targets are x86-64 Windows MSVC, macOS Intel, and Linux
   glibc. ARM and musl are intentionally out of scope.
 - Keep the npm JavaScript adapter synchronous and minimal: create, send, drain,

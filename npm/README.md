@@ -10,8 +10,17 @@ Requirements:
 - x86-64 Windows, macOS, or glibc Linux
 - Linux system WebKitGTK/GTK libraries required by Tauri
 
+The package is published as `@mefistofelix/tauriless` on GitHub Packages. Map
+the scope to GitHub's npm registry and authenticate with your GitHub username
+and a classic personal access token containing `read:packages`:
+
+```console
+npm login --scope=@mefistofelix --auth-type=legacy --registry=https://npm.pkg.github.com
+npm install @mefistofelix/tauriless
+```
+
 ```js
-import { createTauriless } from "tauriless";
+import { createTauriless } from "@mefistofelix/tauriless";
 
 const runtime = createTauriless();
 runtime.send({
