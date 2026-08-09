@@ -1,6 +1,6 @@
 // Manual end-to-end demo for Tauriless' C ABI through Deno FFI.
-// Run from the repository root:
-//   .\deno.exe run --allow-ffi examples\deno_ffi_demo.js
+// Run from the workspace root after building and copying Deno:
+//   .\tauriless\target\debug\deno.exe run --allow-ffi examples\deno_ffi_demo.js
 
 const WINDOW_LABEL = "deno-ffi-demo";
 const TRAY_ID = "tauriless-deno-tray";
@@ -8,7 +8,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 const dylib = Deno.dlopen(
-  new URL("../target/debug/tauriless.dll", import.meta.url),
+  new URL("../tauriless/target/debug/tauriless.dll", import.meta.url),
   {
     tauriless_create: { parameters: ["buffer"], result: "i32" },
     tauriless_send: {
@@ -261,7 +261,7 @@ async function createDemo() {
     }
   }, 16);
 
-  // assets/index.html is only a generic inline-document loader. The complete
+  // tauriless/assets/index.html is only a generic inline-document loader. The complete
   // demo page remains in this file and the fragment is never sent to a server.
   const appUrl = `index.html#${encodeURIComponent(WEBVIEW_HTML)}`;
   console.error("[fase] creazione webview…");

@@ -43,8 +43,9 @@ the C ABI directly; Node may receive a thin N-API adapter later.
 
 ## Toolchain
 
-The repository carries `rustup-init.exe` and `msvcup.exe`. Install the requested
-Windows toolchain with:
+The workspace root carries `rustup-init.exe` and `msvcup.exe`; the Rust/Tauri
+crate lives in `tauriless/`. Install the requested Windows toolchain from the
+workspace root with:
 
 ```powershell
 .\msvcup.exe install msvc msvc-14.44.17.14 sdk-10.0.22621.7 --manifest-update-always
@@ -54,7 +55,7 @@ Use the Rust stable toolchain unless a pinned `rust-toolchain.toml` is added.
 
 ## Verification
 
-Run these from the repository root after changes:
+Run these from the `tauriless` project directory after changes:
 
 ```powershell
 cargo fmt --all -- --check
@@ -62,4 +63,5 @@ cargo check
 cargo test
 ```
 
-Keep the protocol examples and `include/tauriless.h` synchronized with exports.
+Keep the protocol examples and `tauriless/include/tauriless.h` synchronized with
+exports.

@@ -34,20 +34,21 @@ thread.
 
 ## Build on Windows
 
-Install the local toolchain requested for this repository:
+The toolchain executables and this README live in the workspace root; the crate
+lives in `tauriless/`. Install the requested toolchain from the workspace root:
 
 ```powershell
 .\msvcup.exe install msvc msvc-14.44.17.14 sdk-10.0.22621.7 --manifest-update-always
 ```
 
-Then build inside its environment:
+Build the crate from the workspace root inside the MSVC environment:
 
 ```powershell
-cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build"
+cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
 ```
 
-The debug DLL and import library are written to `target/debug`. The C header is
-[`include/tauriless.h`](include/tauriless.h), and
+The debug DLL and import library are written to `tauriless/target/debug`. The C
+header is [`tauriless/include/tauriless.h`](tauriless/include/tauriless.h), and
 [`examples/smoke.c`](examples/smoke.c) is a complete native host.
 
 ## Request and drain protocol
@@ -157,7 +158,8 @@ described in [Slint and the Node.js Event Loop](https://slint.dev/blog/slint-and
 
 [`examples/deno_ffi_demo.js`](examples/deno_ffi_demo.js) is a single-file,
 repeatable manual test. It contains the complete HTML document and passes it in
-the fragment of the built-in app URL to the generic `assets/index.html` loader;
+the fragment of the built-in app URL to the generic
+`tauriless/assets/index.html` loader;
 it uses no web server, separate demo page, or external JavaScript dependencies.
 Keeping a real app URL is important on WebView2 because WRY 0.55.1 cannot parse
 the empty IPC source reported for a top-level `data:` document. The demo creates
@@ -165,13 +167,13 @@ a webview and a tray menu, reports native drag/drop paths to Deno, sends OS
 notifications, and receives Tauri's serialized native events and plugin
 channels through `tauriless_drain`.
 
-Build the DLL, copy the supplied Deno executable beside the debug DLL, and run
-the demo from the repository root:
+From the workspace root, build the DLL, copy the supplied Deno executable beside
+the debug DLL, and run the demo:
 
 ```powershell
-cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build"
-Copy-Item -LiteralPath .\deno.exe -Destination .\target\debug\deno.exe -Force
-.\target\debug\deno.exe run --allow-ffi .\examples\deno_ffi_demo.js
+cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
+Copy-Item -LiteralPath .\deno.exe -Destination .\tauriless\target\debug\deno.exe -Force
+.\tauriless\target\debug\deno.exe run --allow-ffi .\examples\deno_ffi_demo.js
 ```
 
 The debug-directory copy is intentional: the upstream notification plugin
@@ -219,7 +221,7 @@ patterns make the result effectively unrestricted.
 
 This is unsafe for untrusted or remotely controlled web content: such content
 can reach operating-system functionality. Tighten
-`capabilities/default.json` before using Tauriless outside a
+`tauriless/capabilities/default.json` before using Tauriless outside a
 trusted embedding environment.
 
 ## Versioning note
