@@ -188,6 +188,38 @@ already covered generically by the global `Channel<T>` interceptor.
 `tauri://created` and `tauri://error` are local JavaScript constructor signals,
 not emissions on Tauri's Rust event bus, so they are intentionally not listed.
 
+Hosts can add an exact event name without changing or rebuilding the Rust
+library. These bridge-owned commands also work before the first webview exists:
+
+```json
+{ "id": 20, "cmd": "tauriless:subscribe", "payload": { "event": "my-plugin://changed" } }
+```
+
+```json
+{ "id": 21, "cmd": "tauriless:unsubscribe", "payload": { "event": "my-plugin://changed" } }
+```
+
+Subscribe and unsubscribe are idempotent. The list above is the initial set, not
+a protected set: any default can be unsubscribed and later subscribed again.
+Both commands immediately update existing targets and also determine which
+listeners future windows and webviews receive. Their normal `kind: "result"`
+acknowledgements are returned through `drain()`. An added event uses the same
+message shape and target metadata as a default event:
+
+```json
+{
+  "kind": "event",
+  "source": "webview-window",
+  "window": "main",
+  "event": "my-plugin://changed",
+  "payload": { "value": 42 }
+}
+```
+
+There is no special `source: "subscription"` marker. Names are exact and use
+Tauri's valid event-name character set; `*` is not a wildcard. Events already
+queued before unsubscribe remain available to the next drain.
+
 The audit distinguishes transport coverage from plugin availability. The core
 plugins and notification, opener, OS, positioner, and store are
 initialized in this binary.

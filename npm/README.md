@@ -45,6 +45,18 @@ All calls for an instance must execute on the main OS thread. The application
 owns the approximately 16 ms timer that calls `drain()`; Tauriless never invokes
 a JavaScript callback.
 
+Additional exact Tauri event names can be forwarded with the same `send()` API:
+
+```js
+tauriless.send({
+  id: 2,
+  cmd: "tauriless:subscribe",
+  payload: { event: "my-plugin://changed" },
+});
+// Later use `tauriless:unsubscribe` with the same payload. This also works for
+// names from Tauriless' initial built-in event set.
+```
+
 The complete protocol and C header are in the
 [GitHub repository](https://github.com/mefistofelix/tauriless).
 

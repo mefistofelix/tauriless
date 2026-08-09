@@ -5,6 +5,7 @@
 //! only owns the `tauri::App` that must stay on the host's main thread.
 
 mod asset_protocol;
+mod event_subscriptions;
 
 use std::{
     cell::RefCell,
@@ -22,7 +23,7 @@ use tauri::{
     ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody, OwnedInvokeResponder},
     utils::config::WindowConfig,
     webview::InvokeRequest,
-    EventId, Listener, Manager, RunEvent, Webview, WebviewWindow, WebviewWindowBuilder,
+    Manager, RunEvent, Webview, WebviewWindow, WebviewWindowBuilder,
 };
 use thiserror::Error;
 
@@ -55,8 +56,7 @@ const FORWARDED_EVENT_NAMES: &[&str] = &[
 ];
 const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
 
-type Outbox = Arc<Mutex<Vec<Value>>>;
-type WindowListeners = Arc<Mutex<HashMap<String, Vec<EventId>>>>;
+pub(crate) type Outbox = Arc<Mutex<Vec<Value>>>;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -98,6 +98,7 @@ pub struct Tauriless {
     owner: ThreadId,
     outbox: Outbox,
     asset_protocol: asset_protocol::AssetProtocol,
+    event_subscriptions: event_subscriptions::SharedEventSubscriptions,
     draining: bool,
     drain_buffer: CString,
 }
@@ -105,7 +106,11 @@ pub struct Tauriless {
 impl Tauriless {
     pub fn new() -> Result<Self> {
         let outbox = Outbox::default();
-        let event_plugin = event_forwarder(Arc::clone(&outbox));
+        let event_subscriptions = event_subscriptions::EventSubscriptions::new(
+            Arc::clone(&outbox),
+            FORWARDED_EVENT_NAMES,
+        );
+        let event_plugin = event_forwarder(Arc::clone(&event_subscriptions));
         let channel_outbox = Arc::clone(&outbox);
         let asset_protocol = asset_protocol::AssetProtocol::new(Arc::clone(&outbox));
         let builder = tauri::Builder::default()
@@ -145,6 +150,7 @@ impl Tauriless {
             owner: thread::current().id(),
             outbox,
             asset_protocol,
+            event_subscriptions,
             draining: false,
             drain_buffer: CString::default(),
         })
@@ -163,6 +169,17 @@ impl Tauriless {
                 .asset_protocol
                 .respond(request.payload)
                 .map(|_| Value::Null)
+                .map_err(Value::String);
+            result(&self.outbox, request.id, outcome);
+            return Ok(());
+        }
+
+        if event_subscriptions::EventSubscriptions::handles(&request.cmd) {
+            let outcome = self
+                .event_subscriptions
+                .lock()
+                .expect("event subscriptions mutex poisoned")
+                .handle(&request.cmd, request.payload)
                 .map_err(Value::String);
             result(&self.outbox, request.id, outcome);
             return Ok(());
@@ -220,6 +237,10 @@ impl Tauriless {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.check_thread()?;
+        self.event_subscriptions
+            .lock()
+            .expect("event subscriptions mutex poisoned")
+            .clear_targets();
         if let Some(app) = self.app.take() {
             app.cleanup_before_exit();
         }
@@ -354,76 +375,33 @@ fn result(outbox: &Outbox, id: Value, value: std::result::Result<Value, Value>) 
     }
 }
 
-fn push(outbox: &Outbox, value: Value) {
+pub(crate) fn push(outbox: &Outbox, value: Value) {
     outbox.lock().expect("outbox mutex poisoned").push(value);
 }
 
-fn event_forwarder(outbox: Outbox) -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    let window_listeners = WindowListeners::default();
-    let window_outbox = Arc::clone(&outbox);
-    let pending_window_listeners = Arc::clone(&window_listeners);
-    let webview_outbox = outbox;
-
+fn event_forwarder(
+    subscriptions: event_subscriptions::SharedEventSubscriptions,
+) -> tauri::plugin::TauriPlugin<tauri::Wry> {
+    let window_subscriptions = Arc::clone(&subscriptions);
     tauri::plugin::Builder::new("tauriless-events")
         .on_window_ready(move |window| {
-            let label = window.label().to_owned();
-            let ids = forward_native_events(&window, &window_outbox, "window", &label);
-            pending_window_listeners
-                .lock()
-                .expect("window listener mutex poisoned")
-                .insert(label, ids);
+            event_subscriptions::EventSubscriptions::register_window(&window_subscriptions, window);
         })
         .on_webview_ready(move |webview| {
             let label = webview.label().to_owned();
             // A WebviewWindow is first announced as a Window and then as a
-            // Webview. Replace the temporary Window listeners with one
-            // WebviewWindow target so Tauri's AnyLabel events are not doubled.
-            if let Some(ids) = window_listeners
-                .lock()
-                .expect("window listener mutex poisoned")
-                .remove(&label)
-            {
-                for id in ids {
-                    webview.unlisten(id);
-                }
-            }
-
+            // Webview. Replace its Window target with one WebviewWindow target
+            // so Tauri's AnyLabel events are not doubled.
             if let Some(window) = webview.app_handle().get_webview_window(&label) {
-                forward_native_events(&window, &webview_outbox, "webview-window", &label);
+                event_subscriptions::EventSubscriptions::register_webview_window(
+                    &subscriptions,
+                    window,
+                );
             } else {
-                forward_native_events(&webview, &webview_outbox, "webview", &label);
+                event_subscriptions::EventSubscriptions::register_webview(&subscriptions, webview);
             }
         })
         .build()
-}
-
-fn forward_native_events<M: Listener<tauri::Wry>>(
-    target: &M,
-    outbox: &Outbox,
-    source: &'static str,
-    label: &str,
-) -> Vec<EventId> {
-    FORWARDED_EVENT_NAMES
-        .iter()
-        .map(|&name| {
-            let outbox = Arc::clone(outbox);
-            let label = label.to_owned();
-            target.listen(name, move |event| {
-                let payload = serde_json::from_str(event.payload())
-                    .unwrap_or_else(|_| Value::String(event.payload().to_owned()));
-                push(
-                    &outbox,
-                    json!({
-                      "kind": "event",
-                      "source": source,
-                      "window": label,
-                      "event": name,
-                      "payload": payload
-                    }),
-                );
-            })
-        })
-        .collect()
 }
 
 fn collect_event(outbox: &Outbox, run_event: RunEvent) {

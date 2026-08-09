@@ -25,15 +25,17 @@ experimental `node:ffi` module.
   Never replace `window.__TAURI_INTERNALS__` or duplicate built-in core plugins.
 - Do not create a bootstrap WebView2 instance or inject a Tauriless JavaScript
   bridge. Start with no window or webview.
-- With no webview, accept only `plugin:webview|create_webview_window`,
-  deserialize its upstream `WindowConfig`, and build it with Tauri's public
+- With no webview, accept `plugin:webview|create_webview_window` plus the
+  bridge-owned asset response and named-event subscription controls. Deserialize
+  the create command's upstream `WindowConfig` and build it with Tauri's public
   `WebviewWindowBuilder`.
 - Override Tauri's compile-time `tauri` asset resolver through its public
   asynchronous URI scheme hook. Forward requests to drain as `asset-request`
   messages and accept `tauriless:asset-response` through the existing send ABI.
   A response may contain a local `path` for Rust to read or UTF-8 `content`,
   with optional status, headers, and MIME. This bridge-control message and the
-  initial window creation are the only special-cased commands.
+  initial window creation and exact-name event subscribe/unsubscribe controls
+  are the only special-cased commands.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted
@@ -47,6 +49,10 @@ experimental `node:ffi` module.
   `tauriless://webview-message` application event emitted by webviews through
   Tauri's standard event plugin; do not replace it with a custom application
   command. Keep dynamic `Channel<T>` traffic in the global interceptor instead.
+- Use that default named-event set as the initial subscription set. Let hosts
+  add, remove, and later restore any exact name, including a default, with
+  bridge-owned controls backed by Tauri's public target listeners; never
+  interpret an event name as a wildcard.
 - Do not add custom application commands or reimplement window, tray, menu,
   notification, opener, or resource operations in this bridge.
 - Keep the official notification, opener, OS, positioner (with tray support),
