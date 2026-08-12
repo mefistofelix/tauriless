@@ -1,4 +1,4 @@
-name: Publish GitHub Packages npm module
+name: Publish npm module
 
 on:
   repository_dispatch:
@@ -12,7 +12,6 @@ on:
 
 permissions:
   contents: write
-  packages: write
 
 jobs:
   publish:
@@ -27,8 +26,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: "26"
-          registry-url: https://npm.pkg.github.com
-          scope: "@mefistofelix"
+          registry-url: https://registry.npmjs.org
           package-manager-cache: false
 
       - name: Download release binaries
@@ -65,8 +63,8 @@ jobs:
       - name: Publish to npm
         working-directory: npm
         env:
-          NODE_AUTH_TOKEN: ${{ github.token }}
-        run: npm publish
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public
 
       - name: Attach npm tarball to GitHub release
         shell: bash

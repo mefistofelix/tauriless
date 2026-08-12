@@ -4,13 +4,8 @@ Tauriless binds the same five C-ABI functions through the built-in FFI of Node,
 Deno, and Bun. There is no Node-API addon and no JavaScript resource or callback
 layer.
 
-The package is hosted by GitHub Packages. Configure the consuming project's
-`.npmrc` with the scope and a classic GitHub token containing `read:packages`:
-
-```ini
-@mefistofelix:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
-```
+The package is published publicly on the npm registry, so consumers do not
+need a custom registry or authentication.
 
 ```js
 import { Tauriless } from "npm:@mefistofelix/tauriless";
