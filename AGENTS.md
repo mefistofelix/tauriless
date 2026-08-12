@@ -74,10 +74,9 @@ experimental `node:ffi` module.
 
 - The npm package ships the same C-ABI dynamic library; it must not introduce a
   Node-API addon or a second Rust bridge.
-- Publish it publicly to the main npm registry as `@mefistofelix/tauriless`.
-  The initial publish may use a short-lived npm granular access token stored as
-  the `NPM_TOKEN` GitHub Actions secret. After the package exists on npm, prefer
-  npm Trusted Publishing (OIDC) and remove the long-lived publish token.
+- Publish it publicly to the main npm registry as `@mefistofelix/tauriless`
+  through npm Trusted Publishing (OIDC). The publish workflow must request
+  `id-token: write` and must not depend on an npm access token.
 - Supported release targets are x86-64 Windows MSVC, macOS Intel, and Linux
   glibc. ARM and musl are intentionally out of scope.
 - Android and iOS are out of scope. Do not add mobile-only plugin APIs or map
