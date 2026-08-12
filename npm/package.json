@@ -33,7 +33,7 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/mefistofelix/tauriless.git"
+    "url": "git+https://github.com/mefistofelix/tauriless.git"
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org",
