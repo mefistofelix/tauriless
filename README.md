@@ -23,11 +23,12 @@ tauriless_destroy(runtime);
 ```
 
 Tauriless starts with no window or webview and uses the unmodified Tauri crate.
-The first request must be `plugin:webview|create_webview_window`; the bridge
-deserializes its upstream `WindowConfig` payload and calls
-`WebviewWindowBuilder::from_config(...).build()`. Once a real webview exists,
-all requests reuse Tauri's own `Webview::on_message` dispatcher, ACL, plugin
-commands, resource table, invoke responses, and channels.
+The first forwarded Tauri request must be `plugin:webview|create_webview_window`;
+the bridge deserializes its upstream `WindowConfig` payload and calls
+`WebviewWindowBuilder::from_config(...).build()`. Bridge-owned controls, including
+the Windows process AppUserModelID control, may run before it. Once a real
+webview exists, all forwarded requests reuse Tauri's own `Webview::on_message`
+dispatcher, ACL, plugin commands, resource table, invoke responses, and channels.
 
 `tauriless_drain` performs exactly one `App::run_iteration`, collects completed
 IPC responses, Tauri events, and Tauri channel messages, and returns one UTF-8
@@ -55,7 +56,12 @@ cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauri
 
 The debug DLL and import library are written to `tauriless/target/debug`. The C
 header is [`tauriless/include/tauriless.h`](tauriless/include/tauriless.h), and
-[`examples/smoke.c`](examples/smoke.c) is a complete native host.
+[`examples/smoke.c`](examples/smoke.c) is a complete native host. Tauriless uses
+the standard icon assets from the official `create-tauri-app` scaffold instead
+of the former generated 1x1 placeholder. The committed `icon.png` is converted
+to RGBA because Tauri's context generation requires an RGBA PNG; `build.rs`
+asserts PNG color type 6 to prevent the release Actions regression where an
+indexed/grayscale icon breaks the build.
 
 ## Request and drain protocol
 
@@ -76,9 +82,49 @@ A request uses upstream Tauri command names and payload shapes. For example:
 }
 ```
 
-With no existing webview, the command above is the only accepted request. Its
-options are passed to Tauri's standard `WebviewWindowBuilder`, and its result is
-returned by a later drain.
+With no existing webview, the command above is the only forwarded Tauri request.
+Bridge-owned controls remain available. Its options are passed to Tauri's
+standard `WebviewWindowBuilder`, and its result is returned by a later drain.
+
+### Windows process AppUserModelID
+
+On Windows, the host can set the current process explicit AppUserModelID through
+the existing `send()` ABI before creating the first window:
+
+```json
+{
+  "id": 1,
+  "cmd": "tauriless:set-app-user-model-id",
+  "payload": { "appId": "com.example.myapp" }
+}
+```
+
+The bridge calls `SetCurrentProcessExplicitAppUserModelID(appId)` directly in
+`shell32.dll`. `appID` is accepted as an alias for `appId`. Success is returned
+as the normal `kind: "result"` message with `value: null`; a failing HRESULT is
+returned through the same result with `ok: false`. On non-Windows platforms the
+command returns an unsupported-platform result instead of affecting Tauri.
+
+A Deno host should set it before the first webview and can then use the ordinary
+Tauri notification plugin once a webview exists:
+
+```js
+await request("tauriless:set-app-user-model-id", {
+  appId: "com.example.myapp",
+});
+
+await request("plugin:webview|create_webview_window", {
+  options: { label: "main", title: "My App", url: "index.html" },
+});
+
+await request("plugin:notification|notify", {
+  options: { title: "My App", body: "Notifica di prova" },
+});
+```
+
+The AppUserModelID command is bridge-owned and therefore does not need a webview;
+`plugin:notification|notify` is an upstream Tauri plugin command and follows the
+normal forwarded-command rule, so a real webview must already exist.
 
 After creation, `webview` selects a stable `WebviewWindow` source context; child
 webviews are intentionally ignored. If omitted, the only existing webview window
@@ -189,7 +235,7 @@ already covered generically by the global `Channel<T>` interceptor.
 not emissions on Tauri's Rust event bus, so they are intentionally not listed.
 
 Hosts can add an exact event name without changing or rebuilding the Rust
-library. These bridge-owned commands also work before the first webview exists:
+library. These bridge-owned event commands also work before the first webview exists:
 
 ```json
 { "id": 20, "cmd": "tauriless:subscribe", "payload": { "event": "my-plugin://changed" } }
@@ -306,9 +352,13 @@ or `Ctrl+C` to shut the runtime down.
 
 [`examples/deno_npm_demo.js`](examples/deno_npm_demo.js) is the equivalent
 single-file example for the precompiled package. It imports
-`npm:@mefistofelix/tauriless` directly and demonstrates bidirectional messaging:
-webview JavaScript emits `tauriless://webview-message` through Tauri's standard
-event plugin and Deno receives it through `drain()`; Deno emits a targeted
+`npm:@mefistofelix/tauriless` directly. On Windows it first sends
+`tauriless:set-app-user-model-id` with
+`com.mefistofelix.tauriless.deno-npm-demo`, creates the real webview, and then
+sends a startup toast through `plugin:notification|notify`. The same demo also
+demonstrates bidirectional messaging: webview JavaScript emits
+`tauriless://webview-message` through Tauri's standard event plugin and Deno
+receives it through `drain()`; Deno emits a targeted
 `tauriless://host-message` back to the webview. The latter is also used by the
 example's `setHtml()` helper to update a DOM subtree. Tauri exposes neither
 `Webview::eval` nor a native `set_html` as public IPC commands, so no custom
@@ -321,23 +371,21 @@ command or Tauri patch is introduced.
 ## npm package and cross-platform release
 
 The single `npm/index.js` adapter selects Node `node:ffi`, Deno FFI, or
-`bun:ffi`; it contains no native addon. It is published through GitHub Packages as
-`@mefistofelix/tauriless`. A release contains these x86-64 dynamic libraries in
-one tarball:
+`bun:ffi`; it contains no native addon. It is published publicly on the main npm
+registry as `@mefistofelix/tauriless` through Trusted Publishing. A release
+contains these x86-64 dynamic libraries in one tarball:
 
 - `native/win32-x64/tauriless.dll`
 - `native/darwin-x64/libtauriless.dylib`
 - `native/linux-x64/libtauriless.so`
 
-Configure the GitHub registry and install it:
+Install it from the normal npm registry:
 
 ```console
-npm login --scope=@mefistofelix --auth-type=legacy --registry=https://npm.pkg.github.com
 npm install @mefistofelix/tauriless
 ```
 
-The login uses your GitHub username and a classic GitHub personal access token
-with `read:packages`; it is not an npmjs.com account.
+No GitHub Packages `.npmrc` or personal access token is required.
 
 Node, Deno, and Bun use the same class:
 
@@ -359,8 +407,8 @@ const timer = setInterval(() => {
 The class adds only UTF-8 JSON encoding and immediate copying/parsing of the
 borrowed drain string; it has no callbacks, resource layer, or internal timer.
 Run Node 26.1+ with `--experimental-ffi`, Deno with `--allow-ffi`, or Bun
-normally. Deno reads the consuming project's `.npmrc`, including the GitHub
-scope and token.
+normally. Deno can resolve `npm:@mefistofelix/tauriless` directly from the public
+npm registry.
 
 ## PHP FFI example
 

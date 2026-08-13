@@ -33,9 +33,13 @@ experimental `node:ffi` module.
   asynchronous URI scheme hook. Forward requests to drain as `asset-request`
   messages and accept `tauriless:asset-response` through the existing send ABI.
   A response may contain a local `path` for Rust to read or UTF-8 `content`,
-  with optional status, headers, and MIME. This bridge-control message and the
-  initial window creation and exact-name event subscribe/unsubscribe controls
-  are the only special-cased commands.
+  with optional status, headers, and MIME. Bridge-owned controls are limited to
+  that asset response, Windows `tauriless:set-app-user-model-id`, the initial
+  window creation, and exact-name event subscribe/unsubscribe. The Windows
+  process control must call `SetCurrentProcessExplicitAppUserModelID` directly
+  and remain available before the first webview exists. Its canonical payload is
+  `{ "appId": "..." }` (`appID` remains an accepted alias), and it returns its
+  HRESULT outcome through the normal result message.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted
@@ -69,6 +73,11 @@ experimental `node:ffi` module.
   and would not solve JavaScript main-thread callback affinity.
 - All exported C functions must prevent Rust panics from crossing the ABI.
 - Use the pinned, unmodified crates.io Tauri release. Do not patch Tauri or WRY.
+- Keep the default application icon based on the official `create-tauri-app`
+  scaffold assets. `tauriless/icons/icon.png` must remain a real RGBA PNG (PNG
+  color type 6), not indexed/grayscale; `build.rs` deliberately asserts this so
+  GitHub release builds fail locally and clearly if the icon regresses. Keep the
+  Windows `.ico` alongside it and do not restore the old generated 1x1 icons.
 
 ## npm release
 

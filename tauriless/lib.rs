@@ -55,6 +55,7 @@ const FORWARDED_EVENT_NAMES: &[&str] = &[
     "tauriless://webview-message",
 ];
 const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
+const SET_APP_USER_MODEL_ID_COMMAND: &str = "tauriless:set-app-user-model-id";
 
 pub(crate) type Outbox = Arc<Mutex<Vec<Value>>>;
 
@@ -90,6 +91,12 @@ struct Request {
 #[derive(Debug, Deserialize)]
 struct CreateWebviewWindowPayload {
     options: WindowConfig,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetAppUserModelIdPayload {
+    #[serde(rename = "appId", alias = "appID")]
+    app_id: String,
 }
 
 /// The single opaque object held by foreign-language hosts.
@@ -163,6 +170,14 @@ impl Tauriless {
         self.check_running()?;
         let request: Request = serde_json::from_slice(bytes)?;
         validate(&request)?;
+
+        if request.cmd == SET_APP_USER_MODEL_ID_COMMAND {
+            let outcome = set_current_process_app_user_model_id(request.payload)
+                .map(|_| Value::Null)
+                .map_err(Value::String);
+            result(&self.outbox, request.id, outcome);
+            return Ok(());
+        }
 
         if request.cmd == asset_protocol::RESPONSE_COMMAND {
             let outcome = self
@@ -279,6 +294,41 @@ impl Tauriless {
     fn check_running(&self) -> Result<()> {
         self.app.as_ref().map(|_| ()).ok_or(Error::Shutdown)
     }
+}
+
+fn set_current_process_app_user_model_id(payload: Value) -> std::result::Result<(), String> {
+    let payload: SetAppUserModelIdPayload =
+        serde_json::from_value(payload).map_err(|error| error.to_string())?;
+    if payload.app_id.contains('\0') {
+        return Err("appId must not contain a NUL character".into());
+    }
+    set_current_process_explicit_app_user_model_id(&payload.app_id)
+}
+
+#[cfg(windows)]
+fn set_current_process_explicit_app_user_model_id(app_id: &str) -> std::result::Result<(), String> {
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SetCurrentProcessExplicitAppUserModelID(app_id: *const u16) -> i32;
+    }
+
+    let app_id = app_id.encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    let hresult = unsafe { SetCurrentProcessExplicitAppUserModelID(app_id.as_ptr()) };
+    if hresult >= 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "SetCurrentProcessExplicitAppUserModelID failed with HRESULT 0x{:08X}",
+            hresult as u32
+        ))
+    }
+}
+
+#[cfg(not(windows))]
+fn set_current_process_explicit_app_user_model_id(
+    _app_id: &str,
+) -> std::result::Result<(), String> {
+    Err("SetCurrentProcessExplicitAppUserModelID is only available on Windows".into())
 }
 
 fn require_initial_create_command(request: &Request) -> Result<()> {
@@ -581,7 +631,7 @@ mod tests {
     }
 
     #[test]
-    fn only_webview_window_creation_is_allowed_without_a_context() {
+    fn forwarded_tauri_commands_require_webview_creation_without_a_context() {
         let rejected: Request =
             serde_json::from_str(r#"{"id":1,"cmd":"plugin:app|name","payload":{}}"#).unwrap();
         assert!(require_initial_create_command(&rejected).is_err());
@@ -591,5 +641,16 @@ mod tests {
         )
         .unwrap();
         require_initial_create_command(&accepted).unwrap();
+    }
+
+    #[test]
+    fn app_user_model_id_payload_accepts_both_id_spellings() {
+        let camel: SetAppUserModelIdPayload =
+            serde_json::from_str(r#"{"appId":"com.example.app"}"#).unwrap();
+        let win32: SetAppUserModelIdPayload =
+            serde_json::from_str(r#"{"appID":"com.example.app"}"#).unwrap();
+
+        assert_eq!(camel.app_id, "com.example.app");
+        assert_eq!(win32.app_id, "com.example.app");
     }
 }

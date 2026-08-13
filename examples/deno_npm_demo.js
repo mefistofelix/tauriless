@@ -1,15 +1,16 @@
-// Single-file Tauriless demo using the precompiled GitHub Packages module.
+// Single-file Tauriless demo using the precompiled public npm module.
 //
-// Configure @mefistofelix in .npmrc, then run:
+// Run directly with Deno:
 //   deno run --allow-ffi --allow-write examples/deno_npm_demo.js
 //
-// On Windows, OS notifications from an uninstalled development application
-// work reliably when deno.exe is launched from a target/debug directory.
+// On Windows this demo sets an explicit process AppUserModelID before creating
+// the first webview, then sends a notification through Tauri's notification plugin.
 
-import { Tauriless } from "npm:@mefistofelix/tauriless@0.1.4";
+import { Tauriless } from "npm:@mefistofelix/tauriless";
 
 const WINDOW_LABEL = "main";
 const TRAY_ID = "tauriless-deno-npm-tray";
+const APP_USER_MODEL_ID = "com.mefistofelix.tauriless.deno-npm-demo";
 const WEBVIEW_TO_HOST_EVENT = "tauriless://webview-message";
 const HOST_TO_WEBVIEW_EVENT = "tauriless://host-message";
 
@@ -383,6 +384,13 @@ async function createDemo() {
     }
   }, 16);
 
+  if (Deno.build.os === "windows") {
+    console.error(`[fase] AppUserModelID: ${APP_USER_MODEL_ID}`);
+    await request("tauriless:set-app-user-model-id", {
+      appId: APP_USER_MODEL_ID,
+    });
+  }
+
   console.error("[fase] creazione webview…");
   await request("plugin:webview|create_webview_window", {
     options: {
@@ -404,6 +412,14 @@ async function createDemo() {
   }, 10_000);
   await webviewReady;
   clearTimeout(readyTimeout);
+
+  if (Deno.build.os === "windows") {
+    console.error("[fase] notifica Windows di prova…");
+    await notify(
+      "Tauriless",
+      `Notifica con AppUserModelID ${APP_USER_MODEL_ID}`,
+    );
+  }
 
   await postToWebview({
     type: "deno-reply",
