@@ -18,6 +18,8 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(windows)]
+use sha2::{Digest, Sha256};
 use tauri::{
     http::HeaderMap,
     ipc::{CallbackFn, InvokeBody, InvokeResponse, InvokeResponseBody, OwnedInvokeResponder},
@@ -56,6 +58,7 @@ const FORWARDED_EVENT_NAMES: &[&str] = &[
 ];
 const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
 const SET_APP_USER_MODEL_ID_COMMAND: &str = "tauriless:set-app-user-model-id";
+const DEFAULT_IDENTIFIER: &str = "Tauriless";
 
 pub(crate) type Outbox = Arc<Mutex<Vec<Value>>>;
 
@@ -177,13 +180,21 @@ impl Tauriless {
             return Ok(());
         }
 
+        if request.cmd == CREATE_WEBVIEW_WINDOW_COMMAND {
+            return self.create_webview(request);
+        }
+
         if self.app.is_none() {
-            return self.create_first_webview(request);
+            return Err(Error::Request(format!(
+                "no webview exists; the first command must be `{CREATE_WEBVIEW_WINDOW_COMMAND}`"
+            )));
         }
 
         let webviews = self.app()?.webview_windows();
         if webviews.is_empty() {
-            return self.create_first_webview(request);
+            return Err(Error::Request(format!(
+                "no webview exists; create one with `{CREATE_WEBVIEW_WINDOW_COMMAND}`"
+            )));
         }
 
         let webview = select_webview(webviews, request.webview.as_deref())?;
@@ -250,8 +261,7 @@ impl Tauriless {
         self.app.as_ref().ok_or(Error::Shutdown)
     }
 
-    fn create_first_webview(&mut self, request: Request) -> Result<()> {
-        require_initial_create_command(&request)?;
+    fn create_webview(&mut self, request: Request) -> Result<()> {
         self.build_app()?;
 
         let app = self.app()?;
@@ -262,16 +272,20 @@ impl Tauriless {
                     .map_err(|error| error.to_string())?;
 
                 #[cfg(windows)]
-                if let Some(relative) = &payload.options.data_directory {
+                {
                     let local_data = app
                         .path()
                         .local_data_dir()
                         .map_err(|error| error.to_string())?;
-                    builder = builder.data_directory(resolved_initial_webview_data_directory(
-                        &local_data,
-                        &payload.options.label,
-                        relative,
-                    )?);
+                    let data_directory = match &payload.options.data_directory {
+                        Some(relative) => resolved_explicit_webview_data_directory(
+                            &local_data,
+                            &payload.options.label,
+                            relative,
+                        )?,
+                        None => default_webview_data_directory(&local_data)?,
+                    };
+                    builder = builder.data_directory(data_directory);
                 }
 
                 builder
@@ -299,9 +313,10 @@ impl Tauriless {
             .plugin(tauri_plugin_positioner::init())
             .plugin(tauri_plugin_store::Builder::default().build());
         let mut context = tauri::generate_context!();
-        if let Some(app_id) = &self.app_user_model_id {
-            context.config_mut().identifier = app_id.clone();
-        }
+        context.config_mut().identifier = self
+            .app_user_model_id
+            .clone()
+            .unwrap_or_else(|| DEFAULT_IDENTIFIER.into());
         let mut app = self
             .asset_protocol
             .register(builder)
@@ -348,7 +363,7 @@ impl Tauriless {
 }
 
 #[cfg(windows)]
-fn resolved_initial_webview_data_directory(
+fn resolved_explicit_webview_data_directory(
     local_data: &std::path::Path,
     label: &str,
     relative: &std::path::Path,
@@ -363,14 +378,121 @@ fn resolved_initial_webview_data_directory(
     Ok(local_data.join(label).join(relative))
 }
 
+#[cfg(windows)]
 fn set_current_process_app_user_model_id(payload: Value) -> std::result::Result<String, String> {
     let payload: SetAppUserModelIdPayload =
         serde_json::from_value(payload).map_err(|error| error.to_string())?;
     if payload.app_id.contains('\0') {
         return Err("appId must not contain a NUL character".into());
     }
+    install_start_menu_shortcut(&payload.app_id)?;
     set_current_process_explicit_app_user_model_id(&payload.app_id)?;
     Ok(payload.app_id)
+}
+
+#[cfg(not(windows))]
+fn set_current_process_app_user_model_id(_payload: Value) -> std::result::Result<String, String> {
+    Err("AppUserModelID is only available on Windows".into())
+}
+
+#[cfg(windows)]
+fn current_executable_path() -> std::result::Result<std::path::PathBuf, String> {
+    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
+    use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
+
+    let mut buffer = vec![0u16; 260];
+    loop {
+        let written = unsafe { GetModuleFileNameW(None, &mut buffer) } as usize;
+        if written == 0 {
+            return Err(windows::core::Error::from_win32().to_string());
+        }
+        if written < buffer.len() {
+            return Ok(std::path::PathBuf::from(OsString::from_wide(
+                &buffer[..written],
+            )));
+        }
+        buffer.resize(buffer.len() * 2, 0);
+    }
+}
+
+#[cfg(windows)]
+fn install_start_menu_shortcut(app_id: &str) -> std::result::Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        core::{Interface, PCWSTR},
+        Win32::{
+            Foundation::RPC_E_CHANGED_MODE,
+            Storage::EnhancedStorage::PKEY_AppUserModel_ID,
+            System::Com::{
+                CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, IPersistFile,
+                StructuredStorage::PROPVARIANT, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
+            },
+            UI::Shell::{
+                FOLDERID_Programs, IShellLinkW, PropertiesSystem::IPropertyStore,
+                SHGetKnownFolderPath, ShellLink, KF_FLAG_DEFAULT,
+            },
+        },
+    };
+
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let owns_com = if initialized.is_ok() {
+        true
+    } else if initialized == RPC_E_CHANGED_MODE {
+        false
+    } else {
+        return Err(windows::core::Error::from_hresult(initialized).to_string());
+    };
+
+    let outcome = (|| -> std::result::Result<(), String> {
+        let executable = current_executable_path()?;
+        let programs = unsafe {
+            SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None)
+                .map_err(|error| error.to_string())?
+        };
+        let programs_path = unsafe { programs.to_string() };
+        unsafe { CoTaskMemFree(Some(programs.0.cast())) };
+        let programs_path = programs_path.map_err(|error| error.to_string())?;
+
+        let directory = std::path::PathBuf::from(programs_path).join(DEFAULT_IDENTIFIER);
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+
+        let shortcut = directory.join(format!("{}.lnk", windows_path_hash(&executable)));
+        let executable = executable
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+        let shortcut = shortcut
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect::<Vec<_>>();
+
+        unsafe {
+            let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|error| error.to_string())?;
+            link.SetPath(PCWSTR(executable.as_ptr()))
+                .map_err(|error| error.to_string())?;
+
+            let store: IPropertyStore = link.cast().map_err(|error| error.to_string())?;
+            let value = PROPVARIANT::from(app_id);
+            store
+                .SetValue(&PKEY_AppUserModel_ID, &value)
+                .map_err(|error| error.to_string())?;
+            store.Commit().map_err(|error| error.to_string())?;
+
+            let persist: IPersistFile = link.cast().map_err(|error| error.to_string())?;
+            persist
+                .Save(PCWSTR(shortcut.as_ptr()), true)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    })();
+
+    if owns_com {
+        unsafe { CoUninitialize() };
+    }
+    outcome
 }
 
 #[cfg(windows)]
@@ -392,21 +514,35 @@ fn set_current_process_explicit_app_user_model_id(app_id: &str) -> std::result::
     }
 }
 
-#[cfg(not(windows))]
-fn set_current_process_explicit_app_user_model_id(
-    _app_id: &str,
-) -> std::result::Result<(), String> {
-    Err("SetCurrentProcessExplicitAppUserModelID is only available on Windows".into())
+#[cfg(windows)]
+fn default_webview_data_directory(
+    local_data: &std::path::Path,
+) -> std::result::Result<std::path::PathBuf, String> {
+    Ok(webview_data_directory_for_executable(
+        local_data,
+        &current_executable_path()?,
+    ))
 }
 
-fn require_initial_create_command(request: &Request) -> Result<()> {
-    if request.cmd == CREATE_WEBVIEW_WINDOW_COMMAND {
-        Ok(())
-    } else {
-        Err(Error::Request(format!(
-            "no webview exists; the first command must be `{CREATE_WEBVIEW_WINDOW_COMMAND}`"
-        )))
+#[cfg(windows)]
+fn webview_data_directory_for_executable(
+    local_data: &std::path::Path,
+    executable: &std::path::Path,
+) -> std::path::PathBuf {
+    local_data
+        .join(DEFAULT_IDENTIFIER)
+        .join(windows_path_hash(executable))
+}
+
+#[cfg(windows)]
+fn windows_path_hash(path: &std::path::Path) -> String {
+    use std::os::windows::ffi::OsStrExt;
+
+    let mut hasher = Sha256::new();
+    for unit in path.as_os_str().encode_wide() {
+        hasher.update(unit.to_le_bytes());
     }
+    format!("{:x}", hasher.finalize())
 }
 
 fn select_webview(
@@ -702,21 +838,21 @@ mod tests {
     fn forwarded_tauri_commands_require_webview_creation_without_a_context() {
         let rejected: Request =
             serde_json::from_str(r#"{"id":1,"cmd":"plugin:app|name","payload":{}}"#).unwrap();
-        assert!(require_initial_create_command(&rejected).is_err());
+        assert_ne!(rejected.cmd, CREATE_WEBVIEW_WINDOW_COMMAND);
 
         let accepted: Request = serde_json::from_str(
             r#"{"id":1,"cmd":"plugin:webview|create_webview_window","payload":{"options":{"label":"main"}}}"#,
         )
         .unwrap();
-        require_initial_create_command(&accepted).unwrap();
+        assert_eq!(accepted.cmd, CREATE_WEBVIEW_WINDOW_COMMAND);
     }
 
     #[cfg(windows)]
     #[test]
-    fn initial_webview_data_directory_is_resolved_and_confined() {
+    fn explicit_webview_data_directory_is_resolved_and_confined() {
         let local_data = std::path::Path::new(r"C:\Users\test\AppData\Local");
         assert_eq!(
-            resolved_initial_webview_data_directory(
+            resolved_explicit_webview_data_directory(
                 local_data,
                 "main",
                 std::path::Path::new(r"profiles\webview"),
@@ -724,18 +860,36 @@ mod tests {
             .unwrap(),
             local_data.join("main").join(r"profiles\webview")
         );
-        assert!(resolved_initial_webview_data_directory(
+        assert!(resolved_explicit_webview_data_directory(
             local_data,
             "main",
             std::path::Path::new(r"..\escape"),
         )
         .is_err());
-        assert!(resolved_initial_webview_data_directory(
+        assert!(resolved_explicit_webview_data_directory(
             local_data,
             "main",
             std::path::Path::new(r"C:\absolute"),
         )
         .is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn default_webview_data_directory_is_stable_per_executable_path() {
+        let local_data = std::path::Path::new(r"C:\Users\test\AppData\Local");
+        let executable = std::path::Path::new(r"C:\Apps\Example\app.exe");
+        let first = webview_data_directory_for_executable(local_data, executable);
+        let second = webview_data_directory_for_executable(local_data, executable);
+        let moved = webview_data_directory_for_executable(
+            local_data,
+            std::path::Path::new(r"C:\Other\app.exe"),
+        );
+
+        assert_eq!(first, second);
+        assert_eq!(first.parent().unwrap(), local_data.join(DEFAULT_IDENTIFIER));
+        assert_ne!(first, moved);
+        assert_eq!(first.file_name().unwrap().to_string_lossy().len(), 64);
     }
 
     #[test]
@@ -757,6 +911,11 @@ mod tests {
             serde_json::from_slice::<Value>(&runtime.drain().unwrap()).unwrap(),
             json!({ "messages": [] })
         );
+    }
+
+    #[test]
+    fn default_identifier_is_tauriless() {
+        assert_eq!(DEFAULT_IDENTIFIER, "Tauriless");
     }
 
     #[test]

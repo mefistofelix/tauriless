@@ -103,18 +103,21 @@ the existing `send()` ABI before the lazy Tauri app build:
 }
 ```
 
-The bridge calls `SetCurrentProcessExplicitAppUserModelID(appId)` directly in
-`shell32.dll` and stores the successful value until Tauri is built. Immediately
-before `Builder::build`, Tauriless assigns the same value to
+The bridge obtains the current executable with `GetModuleFileNameW(NULL, ...)`,
+creates or updates a per-user shortcut under the Windows `FOLDERID_Programs`
+Start Menu folder through `IShellLinkW`, writes `PKEY_AppUserModel_ID` through
+`IPropertyStore`, commits it, and saves the `.lnk` through `IPersistFile`. It then
+calls `SetCurrentProcessExplicitAppUserModelID(appId)` directly. No PowerShell,
+helper executable, or spawned process is involved. Immediately before
+`Builder::build`, Tauriless assigns the same value to
 `generate_context!().config_mut().identifier`, so Tauri itself and
 `plugin:app|identifier` see the requested identifier. `appID` is accepted as an
 alias for `appId`. Success is returned as the normal `kind: "result"` message
-with `value: null`; a failing HRESULT is returned through the same result with
-`ok: false`. If no AppUserModelID command is sent, the generated Tauri context is
-left untouched and keeps its default identifier. Once the Tauri app has been
-built, changing the AppUserModelID is rejected to prevent the Windows process ID
-and Tauri config from diverging. On non-Windows platforms the command returns an
-unsupported-platform result instead of affecting Tauri.
+with `value: null`; any shortcut/COM/HRESULT failure is returned through the same
+result with `ok: false`. If no AppUserModelID command is sent, Tauri's identifier
+is exactly `Tauriless`. Once the Tauri app has been built, changing the
+AppUserModelID is rejected. On non-Windows platforms the command returns an
+unsupported-platform result.
 
 A Deno host should set it before the first webview and can then use the ordinary
 Tauri notification plugin once a webview exists:
@@ -129,7 +132,6 @@ await request("plugin:webview|create_webview_window", {
     label: "main",
     title: "My App",
     url: "index.html",
-    dataDirectory: "Tauriless/MyApp",
   },
 });
 
@@ -142,14 +144,23 @@ await request("plugin:notification|notify", {
 
 The AppUserModelID command is bridge-owned and therefore works while
 `tauri::App` is still absent; its result is queued in the bridge outbox and can
-be received by `drain()`. On Windows, Tauriless explicitly reapplies a supplied
-relative `dataDirectory` to the first `WebviewWindowBuilder`; this keeps WebView2
-storage independent from a custom Tauri identifier, including path-like
-AppUserModelIDs. Absolute paths and `..` components are rejected. This also
-works around Tauri 2.11.5 dropping `WindowConfig.data_directory` while converting
-the first window config into runtime webview attributes. `plugin:app|identifier`
-and `plugin:notification|notify` are upstream Tauri commands and follow the
-normal forwarded-command rule, so a real webview must already exist.
+be received by `drain()`. App identity and WebView2 storage are deliberately
+independent. On Windows, if `dataDirectory` is omitted, every webview-window uses
+`%LOCALAPPDATA%\\Tauriless\\<sha256>`, where `<sha256>` is the SHA-256 of the
+exact absolute executable path returned by `GetModuleFileNameW`, encoded as
+UTF-16LE. The same executable path therefore shares one WebView2 profile across
+its windows; moving or copying the executable to another path gets another
+profile, regardless of the AppUserModelID.
+
+If `dataDirectory` is supplied, it takes precedence and retains the upstream
+Tauri relative-LocalData behavior; absolute paths and `..` components are
+rejected. Tauriless reapplies that resolved directory explicitly through
+`WebviewWindowBuilder::data_directory`, working around Tauri 2.11.5 dropping
+`WindowConfig.data_directory` during conversion to runtime webview attributes.
+The same interception is applied to every `plugin:webview|create_webview_window`
+request, not only the first. `plugin:app|identifier` and
+`plugin:notification|notify` remain ordinary upstream Tauri commands and require
+a real webview.
 
 After creation, `webview` selects a stable `WebviewWindow` source context; child
 webviews are intentionally ignored. If omitted, the only existing webview window

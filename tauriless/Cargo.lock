@@ -3648,11 +3648,12 @@ dependencies = [
 
 [[package]]
 name = "tauriless"
-version = "0.1.9"
+version = "0.1.10"
 dependencies = [
  "mime_guess",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-notification",
@@ -3661,6 +3662,7 @@ dependencies = [
  "tauri-plugin-positioner",
  "tauri-plugin-store",
  "thiserror 2.0.20",
+ "windows",
 ]
 
 [[package]]

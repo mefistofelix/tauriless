@@ -37,22 +37,29 @@ experimental `node:ffi` module.
   messages and accept `tauriless:asset-response` through the existing send ABI.
   A response may contain a local `path` for Rust to read or UTF-8 `content`,
   with optional status, headers, and MIME. Bridge-owned controls are limited to
-  that asset response, Windows `tauriless:set-app-user-model-id`, the initial
-  window creation, and exact-name event subscribe/unsubscribe. The Windows
-  process control must call `SetCurrentProcessExplicitAppUserModelID` directly
-  and remain available only before the lazy Tauri app build. Its canonical
-  payload is `{ "appId": "..." }` (`appID` remains an accepted alias), and it
-  returns its HRESULT outcome through the normal result message. Persist the
-  successful value in bridge state and copy it into
-  `generate_context!().config_mut().identifier` immediately before
-  `Builder::build`; if the command is never sent, leave Tauri's default
-  identifier untouched. Reject attempts to change it after the app is built.
-  On Windows, if the initial upstream `WindowConfig` supplies a relative
-  `dataDirectory`, reapply its resolved LocalData path explicitly through
-  `WebviewWindowBuilder::data_directory` before `build()`. Tauri 2.11.5 loses
-  this field while converting `WindowConfig` into runtime webview attributes;
-  keep this workaround local to Tauriless rather than patching Tauri upstream,
-  and reject absolute/parent-traversing data-directory values.
+  that asset response, Windows `tauriless:set-app-user-model-id`, webview-window
+  creation, and exact-name event subscribe/unsubscribe. The Windows AppUserModelID
+  control remains available only before the lazy Tauri app build. Its canonical
+  payload is `{ "appId": "..." }` (`appID` remains an accepted alias). It must
+  obtain the current process executable with `GetModuleFileNameW`, create or
+  update a per-user Start Menu shortcut under `FOLDERID_Programs` through
+  `IShellLinkW`, set `PKEY_AppUserModel_ID` through `IPropertyStore`, save it
+  through `IPersistFile`, and then call `SetCurrentProcessExplicitAppUserModelID`.
+  Do not spawn PowerShell or any helper process. Persist the successful value in
+  bridge state and copy it into `generate_context!().config_mut().identifier`
+  immediately before `Builder::build`; if the command is never sent, set the
+  Tauri identifier to exactly `Tauriless`. Reject attempts to change it after
+  the app is built.
+- On Windows, every `plugin:webview|create_webview_window` request must explicitly
+  set the builder data directory. If upstream `WindowConfig.dataDirectory` is
+  present, preserve the Tauri 2.11.5 relative LocalData resolution and reject
+  absolute/parent-traversing values. If it is omitted, use
+  `%LOCALAPPDATA%/Tauriless/<sha256>` where the SHA-256 input is the exact UTF-16LE
+  absolute executable path returned by `GetModuleFileNameW(NULL, ...)`. Thus the
+  default WebView2 profile depends only on the executable path, never on the
+  Tauri/AppUserModel identifier, and moving/copying an executable yields a new
+  profile. Apply this rule to subsequent webview-window creation too, not only
+  the first one.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted

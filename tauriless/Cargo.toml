@@ -1,7 +1,7 @@
 [package]
 name = "tauriless"
 description = "A manually-pumped Tauri runtime with a minimal C ABI"
-version = "0.1.9"
+version = "0.1.10"
 edition = "2021"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/mefistofelix/tauriless"
@@ -22,6 +22,10 @@ tauri-plugin-os = "=2.3.2"
 tauri-plugin-positioner = { version = "=2.3.3", features = ["tray-icon"] }
 tauri-plugin-store = "=2.4.4"
 thiserror = "2.0"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Storage_EnhancedStorage", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem"] }
 
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
