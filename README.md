@@ -99,41 +99,75 @@ the existing `send()` ABI before the lazy Tauri app build:
 {
   "id": 1,
   "cmd": "tauriless:set-app-user-model-id",
-  "payload": { "appId": "com.example.myapp" }
+  "payload": {
+    "appId": "com.example.myapp",
+    "name": "My App"
+  }
 }
 ```
 
 The bridge obtains the current executable with `GetModuleFileNameW(NULL, ...)`,
-creates or updates a per-user shortcut under the Windows `FOLDERID_Programs`
-Start Menu folder through `IShellLinkW`, writes `PKEY_AppUserModel_ID` through
-`IPropertyStore`, commits it, and saves the `.lnk` through `IPersistFile`. It then
-calls `SetCurrentProcessExplicitAppUserModelID(appId)` directly. No PowerShell,
-helper executable, or spawned process is involved. Immediately before
+creates or updates `FOLDERID_Programs\My App.lnk` directly, without an
+intermediate `Tauriless` directory, and always refreshes its `IShellLinkW`
+target to that absolute executable. It writes `PKEY_AppUserModel_ID` through
+`IPropertyStore`, commits it, and saves the `.lnk` through `IPersistFile`. An
+existing shortcut with that name is updated. It then calls
+`SetCurrentProcessExplicitAppUserModelID(appId)` directly. All of this completes
+before Tauri or WebView is initialized. No PowerShell, helper executable, or
+spawned process is involved. Immediately before
 `Builder::build`, Tauriless assigns the same value to
 `generate_context!().config_mut().identifier`, so Tauri itself and
 `plugin:app|identifier` see the requested identifier. `appID` is accepted as an
-alias for `appId`. Success is returned as the normal `kind: "result"` message
-with `value: null`; any shortcut/COM/HRESULT failure is returned through the same
-result with `ok: false`. If no AppUserModelID command is sent, Tauri's identifier
-is exactly `Tauriless`. Once the Tauri app has been built, changing the
-AppUserModelID is rejected. On non-Windows platforms the command returns an
+alias for `appId`. `name` is optional; when omitted Tauriless uses the filename
+stem of the host JavaScript/TypeScript script from the process command line, or
+falls back to the current executable filename stem.
+
+Success is returned through `drain()` with the resolved paths:
+
+```json
+{
+  "appId": "com.example.myapp",
+  "name": "My App",
+  "executablePath": "C:\\Tools\\deno.exe",
+  "shortcutPath": "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\My App.lnk"
+}
+```
+
+Failures have a clear `operation` and `message`, plus the path when already
+known, for example:
+
+```json
+{
+  "operation": "save-start-menu-shortcut",
+  "message": "Access is denied. (0x80070005)",
+  "executablePath": "C:\\Tools\\deno.exe",
+  "shortcutPath": "C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\My App.lnk"
+}
+```
+
+If no AppUserModelID command is sent, Tauri's identifier is exactly
+`Tauriless`. Once the Tauri app has been built, changing the AppUserModelID is
+rejected. On non-Windows platforms the command returns a structured
 unsupported-platform result.
 
 A Deno host should set it before the first webview and can then use the ordinary
 Tauri notification plugin once a webview exists:
 
 ```js
-await request("tauriless:set-app-user-model-id", {
+const registration = await request("tauriless:set-app-user-model-id", {
   appId: "com.example.myapp",
+  name: "My App",
 });
+console.log(registration.shortcutPath);
 
-await request("plugin:webview|create_webview_window", {
+const created = await request("plugin:webview|create_webview_window", {
   options: {
     label: "main",
     title: "My App",
     url: "index.html",
   },
 });
+console.log(created.webviewDataDirectory);
 
 console.log(await request("plugin:app|identifier", {}));
 
@@ -151,6 +185,11 @@ exact absolute executable path returned by `GetModuleFileNameW`, encoded as
 UTF-16LE. The same executable path therefore shares one WebView2 profile across
 its windows; moving or copying the executable to another path gets another
 profile, regardless of the AppUserModelID.
+
+The successful create result contains `label` and the exact
+`webviewDataDirectory`. A WebView creation failure contains `operation`,
+`message`, and the same path once it has been resolved. The hash-based default
+directory is intentionally unchanged and never uses the shortcut `name`.
 
 If `dataDirectory` is supplied, it takes precedence and retains the upstream
 Tauri relative-LocalData behavior; absolute paths and `..` components are

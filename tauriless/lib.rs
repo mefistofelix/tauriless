@@ -100,6 +100,8 @@ struct CreateWebviewWindowPayload {
 struct SetAppUserModelIdPayload {
     #[serde(rename = "appId", alias = "appID")]
     app_id: String,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 /// The single opaque object held by foreign-language hosts.
@@ -147,14 +149,17 @@ impl Tauriless {
 
         if request.cmd == SET_APP_USER_MODEL_ID_COMMAND {
             let outcome = if self.app.is_some() {
-                Err("AppUserModelID must be set before the Tauri app is initialized".into())
+                Err(json!({
+                  "operation": "set-app-user-model-id",
+                  "message": "AppUserModelID must be set before the Tauri app is initialized"
+                }))
             } else {
-                set_current_process_app_user_model_id(request.payload).map(|app_id| {
+                set_current_process_app_user_model_id(request.payload).map(|(app_id, value)| {
                     self.app_user_model_id = Some(app_id);
-                    Value::Null
+                    value
                 })
             }
-            .map_err(Value::String);
+            .map_err(|error| error);
             result(&self.outbox, request.id, outcome);
             return Ok(());
         }
@@ -262,39 +267,122 @@ impl Tauriless {
     }
 
     fn create_webview(&mut self, request: Request) -> Result<()> {
-        self.build_app()?;
+        let payload = match serde_json::from_value::<CreateWebviewWindowPayload>(request.payload) {
+            Ok(payload) => payload,
+            Err(error) => {
+                result(
+                    &self.outbox,
+                    request.id,
+                    Err(json!({
+                      "operation": "parse-create-webview-window",
+                      "message": error.to_string()
+                    })),
+                );
+                return Ok(());
+            }
+        };
+        if let Err(error) = self.build_app() {
+            result(
+                &self.outbox,
+                request.id,
+                Err(json!({
+                  "operation": "build-tauri-app",
+                  "message": error.to_string()
+                })),
+            );
+            return Ok(());
+        }
 
         let app = self.app()?;
-        let outcome = serde_json::from_value::<CreateWebviewWindowPayload>(request.payload)
-            .map_err(|error| error.to_string())
-            .and_then(|payload| {
-                let mut builder = WebviewWindowBuilder::from_config(app.handle(), &payload.options)
-                    .map_err(|error| error.to_string())?;
-
-                #[cfg(windows)]
-                {
-                    let local_data = app
-                        .path()
-                        .local_data_dir()
-                        .map_err(|error| error.to_string())?;
-                    let data_directory = match &payload.options.data_directory {
-                        Some(relative) => resolved_explicit_webview_data_directory(
-                            &local_data,
-                            &payload.options.label,
-                            relative,
-                        )?,
-                        None => default_webview_data_directory(&local_data)?,
-                    };
-                    builder = builder.data_directory(data_directory);
+        #[cfg(windows)]
+        let data_directory = {
+            let local_data = match app.path().local_data_dir() {
+                Ok(path) => path,
+                Err(error) => {
+                    result(
+                        &self.outbox,
+                        request.id,
+                        Err(json!({
+                          "operation": "resolve-local-data-directory",
+                          "message": error.to_string()
+                        })),
+                    );
+                    return Ok(());
                 }
+            };
+            let resolved = match &payload.options.data_directory {
+                Some(relative) => resolved_explicit_webview_data_directory(
+                    &local_data,
+                    &payload.options.label,
+                    relative,
+                ),
+                None => default_webview_data_directory(&local_data),
+            };
+            let path = match resolved {
+                Ok(path) => path,
+                Err(error) => {
+                    result(&self.outbox, request.id, Err(error));
+                    return Ok(());
+                }
+            };
+            path
+        };
 
-                builder
-                    .build()
-                    .map(|_| Value::Null)
-                    .map_err(|error| error.to_string())
-            });
+        let mut builder = match WebviewWindowBuilder::from_config(app.handle(), &payload.options) {
+            Ok(builder) => builder,
+            Err(error) => {
+                #[cfg(windows)]
+                let error = json!({
+                  "operation": "create-webview-window",
+                  "message": error.to_string(),
+                  "webviewDataDirectory": path_string(&data_directory)
+                });
+                #[cfg(not(windows))]
+                let error = json!({
+                  "operation": "create-webview-window",
+                  "message": error.to_string()
+                });
+                result(&self.outbox, request.id, Err(error));
+                return Ok(());
+            }
+        };
+        #[cfg(windows)]
+        {
+            builder = builder.data_directory(data_directory.clone());
+        }
 
-        result(&self.outbox, request.id, outcome.map_err(Value::String));
+        let outcome = builder.build().map_err(|error| {
+            #[cfg(windows)]
+            {
+                json!({
+                  "operation": "create-webview-window",
+                  "message": error.to_string(),
+                  "webviewDataDirectory": path_string(&data_directory)
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                json!({
+                  "operation": "create-webview-window",
+                  "message": error.to_string()
+                })
+            }
+        });
+        let outcome = outcome.map(|_| {
+            #[cfg(windows)]
+            {
+                json!({
+                  "label": payload.options.label,
+                  "webviewDataDirectory": path_string(&data_directory)
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                json!({ "label": payload.options.label })
+            }
+        });
+
+        result(&self.outbox, request.id, outcome);
         Ok(())
     }
 
@@ -367,32 +455,77 @@ fn resolved_explicit_webview_data_directory(
     local_data: &std::path::Path,
     label: &str,
     relative: &std::path::Path,
-) -> std::result::Result<std::path::PathBuf, String> {
+) -> std::result::Result<std::path::PathBuf, Value> {
+    let path = local_data.join(label).join(relative);
     if relative.is_absolute()
         || relative
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
     {
-        return Err("dataDirectory must be a safe relative path".into());
+        return Err(json!({
+          "operation": "resolve-webview-data-directory",
+          "message": "dataDirectory must be a safe relative path",
+          "webviewDataDirectory": path_string(&path)
+        }));
     }
-    Ok(local_data.join(label).join(relative))
+    Ok(path)
 }
 
 #[cfg(windows)]
-fn set_current_process_app_user_model_id(payload: Value) -> std::result::Result<String, String> {
-    let payload: SetAppUserModelIdPayload =
-        serde_json::from_value(payload).map_err(|error| error.to_string())?;
+fn set_current_process_app_user_model_id(
+    payload: Value,
+) -> std::result::Result<(String, Value), Value> {
+    let payload: SetAppUserModelIdPayload = serde_json::from_value(payload).map_err(|error| {
+        json!({
+          "operation": "parse-app-user-model-id",
+          "message": error.to_string()
+        })
+    })?;
     if payload.app_id.contains('\0') {
-        return Err("appId must not contain a NUL character".into());
+        return Err(json!({
+          "operation": "validate-app-user-model-id",
+          "message": "appId must not contain a NUL character"
+        }));
     }
-    install_start_menu_shortcut(&payload.app_id)?;
-    set_current_process_explicit_app_user_model_id(&payload.app_id)?;
-    Ok(payload.app_id)
+    let executable = current_executable_path().map_err(|message| {
+        json!({
+          "operation": "resolve-executable",
+          "message": message
+        })
+    })?;
+    let name = application_name(payload.name.as_deref(), &executable).map_err(|message| {
+        json!({
+          "operation": "resolve-shortcut-name",
+          "message": message,
+          "executablePath": path_string(&executable)
+        })
+    })?;
+    let shortcut = install_start_menu_shortcut(&payload.app_id, &name, &executable)?;
+    set_current_process_explicit_app_user_model_id(&payload.app_id).map_err(|message| {
+        registration_error(
+            "set-current-process-app-user-model-id",
+            message,
+            &executable,
+            &shortcut,
+        )
+    })?;
+    let value = json!({
+      "appId": payload.app_id,
+      "name": name,
+      "executablePath": path_string(&executable),
+      "shortcutPath": path_string(&shortcut)
+    });
+    Ok((payload.app_id, value))
 }
 
 #[cfg(not(windows))]
-fn set_current_process_app_user_model_id(_payload: Value) -> std::result::Result<String, String> {
-    Err("AppUserModelID is only available on Windows".into())
+fn set_current_process_app_user_model_id(
+    _payload: Value,
+) -> std::result::Result<(String, Value), Value> {
+    Err(json!({
+      "operation": "set-app-user-model-id",
+      "message": "AppUserModelID is only available on Windows"
+    }))
 }
 
 #[cfg(windows)]
@@ -416,7 +549,11 @@ fn current_executable_path() -> std::result::Result<std::path::PathBuf, String> 
 }
 
 #[cfg(windows)]
-fn install_start_menu_shortcut(app_id: &str) -> std::result::Result<(), String> {
+fn install_start_menu_shortcut(
+    app_id: &str,
+    name: &str,
+    executable: &std::path::Path,
+) -> std::result::Result<std::path::PathBuf, Value> {
     use std::os::windows::ffi::OsStrExt;
     use windows::{
         core::{Interface, PCWSTR},
@@ -434,29 +571,41 @@ fn install_start_menu_shortcut(app_id: &str) -> std::result::Result<(), String> 
         },
     };
 
+    let programs = unsafe {
+        SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None).map_err(|error| {
+            json!({
+              "operation": "resolve-start-menu-directory",
+              "message": error.to_string(),
+              "executablePath": path_string(executable)
+            })
+        })?
+    };
+    let programs_path = unsafe { programs.to_string() };
+    unsafe { CoTaskMemFree(Some(programs.0.cast())) };
+    let programs_path = programs_path.map_err(|error| {
+        json!({
+          "operation": "resolve-start-menu-directory",
+          "message": error.to_string(),
+          "executablePath": path_string(executable)
+        })
+    })?;
+    let shortcut = start_menu_shortcut_path(std::path::Path::new(&programs_path), name);
+
     let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
     let owns_com = if initialized.is_ok() {
         true
     } else if initialized == RPC_E_CHANGED_MODE {
         false
     } else {
-        return Err(windows::core::Error::from_hresult(initialized).to_string());
+        return Err(registration_error(
+            "initialize-com",
+            windows::core::Error::from_hresult(initialized).to_string(),
+            executable,
+            &shortcut,
+        ));
     };
 
-    let outcome = (|| -> std::result::Result<(), String> {
-        let executable = current_executable_path()?;
-        let programs = unsafe {
-            SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None)
-                .map_err(|error| error.to_string())?
-        };
-        let programs_path = unsafe { programs.to_string() };
-        unsafe { CoTaskMemFree(Some(programs.0.cast())) };
-        let programs_path = programs_path.map_err(|error| error.to_string())?;
-
-        let directory = std::path::PathBuf::from(programs_path).join(DEFAULT_IDENTIFIER);
-        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
-
-        let shortcut = directory.join(format!("{}.lnk", windows_path_hash(&executable)));
+    let outcome = (|| -> std::result::Result<(), (&'static str, String)> {
         let executable = executable
             .as_os_str()
             .encode_wide()
@@ -470,21 +619,27 @@ fn install_start_menu_shortcut(app_id: &str) -> std::result::Result<(), String> 
 
         unsafe {
             let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| ("create-shell-link", error.to_string()))?;
             link.SetPath(PCWSTR(executable.as_ptr()))
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| ("set-shortcut-target", error.to_string()))?;
 
-            let store: IPropertyStore = link.cast().map_err(|error| error.to_string())?;
+            let store: IPropertyStore = link
+                .cast()
+                .map_err(|error| ("open-shortcut-properties", error.to_string()))?;
             let value = PROPVARIANT::from(app_id);
             store
                 .SetValue(&PKEY_AppUserModel_ID, &value)
-                .map_err(|error| error.to_string())?;
-            store.Commit().map_err(|error| error.to_string())?;
+                .map_err(|error| ("set-shortcut-app-user-model-id", error.to_string()))?;
+            store
+                .Commit()
+                .map_err(|error| ("commit-shortcut-properties", error.to_string()))?;
 
-            let persist: IPersistFile = link.cast().map_err(|error| error.to_string())?;
+            let persist: IPersistFile = link
+                .cast()
+                .map_err(|error| ("open-shortcut-persistence", error.to_string()))?;
             persist
                 .Save(PCWSTR(shortcut.as_ptr()), true)
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| ("save-start-menu-shortcut", error.to_string()))?;
         }
         Ok(())
     })();
@@ -493,6 +648,10 @@ fn install_start_menu_shortcut(app_id: &str) -> std::result::Result<(), String> 
         unsafe { CoUninitialize() };
     }
     outcome
+        .map(|_| shortcut.clone())
+        .map_err(|(operation, message)| {
+            registration_error(operation, message, executable, &shortcut)
+        })
 }
 
 #[cfg(windows)]
@@ -517,10 +676,16 @@ fn set_current_process_explicit_app_user_model_id(app_id: &str) -> std::result::
 #[cfg(windows)]
 fn default_webview_data_directory(
     local_data: &std::path::Path,
-) -> std::result::Result<std::path::PathBuf, String> {
+) -> std::result::Result<std::path::PathBuf, Value> {
+    let executable = current_executable_path().map_err(|message| {
+        json!({
+          "operation": "resolve-executable",
+          "message": message
+        })
+    })?;
     Ok(webview_data_directory_for_executable(
         local_data,
-        &current_executable_path()?,
+        &executable,
     ))
 }
 
@@ -543,6 +708,120 @@ fn windows_path_hash(path: &std::path::Path) -> String {
         hasher.update(unit.to_le_bytes());
     }
     format!("{:x}", hasher.finalize())
+}
+
+#[cfg(windows)]
+fn application_name(
+    requested: Option<&str>,
+    executable: &std::path::Path,
+) -> std::result::Result<String, String> {
+    application_name_from_args(requested, executable, std::env::args_os().skip(1))
+}
+
+#[cfg(windows)]
+fn application_name_from_args<I, S>(
+    requested: Option<&str>,
+    executable: &std::path::Path,
+    arguments: I,
+) -> std::result::Result<String, String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<std::ffi::OsStr>,
+{
+    if let Some(name) = requested {
+        return valid_windows_name(name);
+    }
+
+    let script_extensions = [
+        "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "py", "php",
+    ];
+    let script = arguments.into_iter().find_map(|argument| {
+        let path = std::path::Path::new(argument.as_ref());
+        let extension = path.extension()?.to_str()?;
+        script_extensions
+            .iter()
+            .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+            .then(|| {
+                path.file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+            })
+            .flatten()
+    });
+    let inferred = script.or_else(|| {
+        executable
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+    });
+    valid_windows_name(
+        inferred
+            .as_deref()
+            .ok_or_else(|| "cannot infer a name from the host script or executable".to_owned())?,
+    )
+}
+
+#[cfg(windows)]
+fn start_menu_shortcut_path(programs: &std::path::Path, name: &str) -> std::path::PathBuf {
+    programs.join(format!("{name}.lnk"))
+}
+
+#[cfg(windows)]
+fn valid_windows_name(name: &str) -> std::result::Result<String, String> {
+    let name = name.trim();
+    let invalid = name.is_empty()
+        || name.ends_with(['.', ' '])
+        || name
+            .chars()
+            .any(|character| character.is_control() || r#"<>:"/\|?*"#.contains(character));
+    let stem = name.split('.').next().unwrap_or_default();
+    let reserved = matches!(
+        stem.to_ascii_uppercase().as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    );
+    if invalid || reserved {
+        Err("name must be a valid single Windows file name".into())
+    } else {
+        Ok(name.to_owned())
+    }
+}
+
+fn path_string(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+#[cfg(windows)]
+fn registration_error(
+    operation: &'static str,
+    message: String,
+    executable: &std::path::Path,
+    shortcut: &std::path::Path,
+) -> Value {
+    json!({
+      "operation": operation,
+      "message": message,
+      "executablePath": path_string(executable),
+      "shortcutPath": path_string(shortcut)
+    })
 }
 
 fn select_webview(
@@ -895,12 +1174,72 @@ mod tests {
     #[test]
     fn app_user_model_id_payload_accepts_both_id_spellings() {
         let camel: SetAppUserModelIdPayload =
-            serde_json::from_str(r#"{"appId":"com.example.app"}"#).unwrap();
+            serde_json::from_str(r#"{"appId":"com.example.app","name":"Example App"}"#).unwrap();
         let win32: SetAppUserModelIdPayload =
             serde_json::from_str(r#"{"appID":"com.example.app"}"#).unwrap();
 
         assert_eq!(camel.app_id, "com.example.app");
+        assert_eq!(camel.name.as_deref(), Some("Example App"));
         assert_eq!(win32.app_id, "com.example.app");
+        assert!(win32.name.is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shortcut_is_directly_under_programs_and_uses_only_its_name() {
+        let programs = std::path::Path::new(
+            r"C:\Users\test\AppData\Roaming\Microsoft\Windows\Start Menu\Programs",
+        );
+        let shortcut = start_menu_shortcut_path(programs, "Example App");
+
+        assert_eq!(shortcut, programs.join("Example App.lnk"));
+        assert_eq!(shortcut.parent(), Some(programs));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shortcut_name_prefers_argument_then_script_then_executable() {
+        let executable = std::path::Path::new(r"C:\Tools\deno.exe");
+        assert_eq!(
+            application_name_from_args(
+                Some("Passed Name"),
+                executable,
+                [std::ffi::OsString::from(r"C:\apps\ignored.js")],
+            )
+            .unwrap(),
+            "Passed Name"
+        );
+        assert_eq!(
+            application_name_from_args(
+                None,
+                executable,
+                [
+                    std::ffi::OsString::from("run"),
+                    std::ffi::OsString::from(r"C:\apps\demo.js")
+                ],
+            )
+            .unwrap(),
+            "demo"
+        );
+        assert_eq!(
+            application_name_from_args(None, executable, std::iter::empty::<std::ffi::OsString>())
+                .unwrap(),
+            "deno"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn path_errors_are_structured_for_hosts() {
+        let error = registration_error(
+            "save-start-menu-shortcut",
+            "access denied".into(),
+            std::path::Path::new(r"C:\Tools\deno.exe"),
+            std::path::Path::new(r"C:\Programs\Demo.lnk"),
+        );
+        assert_eq!(error["operation"], "save-start-menu-shortcut");
+        assert_eq!(error["message"], "access denied");
+        assert_eq!(error["shortcutPath"], r"C:\Programs\Demo.lnk");
     }
 
     #[test]

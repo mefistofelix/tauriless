@@ -40,6 +40,13 @@ All calls for an instance must execute on the main OS thread. The application
 owns the approximately 16 ms timer that calls `drain()`; Tauriless never invokes
 a JavaScript callback.
 
+On Windows, call `tauriless:set-app-user-model-id` before creating the first
+webview. Its optional `name` selects the direct Start Menu `<name>.lnk`; when
+omitted the script/executable stem is used. The result exposes `shortcutPath`,
+and `plugin:webview|create_webview_window` exposes `webviewDataDirectory`.
+Failures are structured objects with `operation`, `message`, and the applicable
+resolved path.
+
 Additional exact Tauri event names can be forwarded with the same `send()` API:
 
 ```js

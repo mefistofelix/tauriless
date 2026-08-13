@@ -40,16 +40,24 @@ experimental `node:ffi` module.
   that asset response, Windows `tauriless:set-app-user-model-id`, webview-window
   creation, and exact-name event subscribe/unsubscribe. The Windows AppUserModelID
   control remains available only before the lazy Tauri app build. Its canonical
-  payload is `{ "appId": "..." }` (`appID` remains an accepted alias). It must
+  payload is `{ "appId": "...", "name": "..." }` (`appID` remains an accepted
+  alias and `name` is optional). It must
   obtain the current process executable with `GetModuleFileNameW`, create or
-  update a per-user Start Menu shortcut under `FOLDERID_Programs` through
-  `IShellLinkW`, set `PKEY_AppUserModel_ID` through `IPropertyStore`, save it
-  through `IPersistFile`, and then call `SetCurrentProcessExplicitAppUserModelID`.
-  Do not spawn PowerShell or any helper process. Persist the successful value in
+  update the shortcut directly as `FOLDERID_Programs/<name>.lnk`, without a
+  `Tauriless` subdirectory. If `name` is omitted, infer the script filename
+  stem from the process command line and fall back to the executable filename
+  stem. `IShellLinkW::SetPath` must always be refreshed to the absolute current
+  executable, and `PKEY_AppUserModel_ID` must be refreshed through
+  `IPropertyStore` before saving with `IPersistFile`. Then call
+  `SetCurrentProcessExplicitAppUserModelID`. Do not spawn PowerShell or any
+  helper process. The successful result must include `shortcutPath`; failures
+  must be structured with clear `operation` and `message` fields and include
+  `shortcutPath` whenever it has been resolved. Persist the successful value in
   bridge state and copy it into `generate_context!().config_mut().identifier`
   immediately before `Builder::build`; if the command is never sent, set the
   Tauri identifier to exactly `Tauriless`. Reject attempts to change it after
-  the app is built.
+  the app is built. Shortcut creation and the explicit process AppUserModelID
+  must both complete before Tauri and WebView initialization.
 - On Windows, every `plugin:webview|create_webview_window` request must explicitly
   set the builder data directory. If upstream `WindowConfig.dataDirectory` is
   present, preserve the Tauri 2.11.5 relative LocalData resolution and reject
@@ -59,7 +67,10 @@ experimental `node:ffi` module.
   default WebView2 profile depends only on the executable path, never on the
   Tauri/AppUserModel identifier, and moving/copying an executable yields a new
   profile. Apply this rule to subsequent webview-window creation too, not only
-  the first one.
+  the first one. Do not replace this hash with the shortcut `name`. The command
+  result must expose the resolved `webviewDataDirectory`; creation/path errors
+  must be structured with `operation` and `message` and include that path once
+  it has been resolved.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted

@@ -1,6 +1,6 @@
 {
   "name": "@mefistofelix/tauriless",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Tauriless through the built-in FFI of Node, Deno, or Bun",
   "type": "module",
   "exports": {
