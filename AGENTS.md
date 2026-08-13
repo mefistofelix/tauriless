@@ -13,10 +13,13 @@ experimental `node:ffi` module.
 
 - Reuse the published Tauri crates and their public APIs. Prefer adding code in
   this repository over patching or forking Tauri.
-- `tauriless_drain` performs exactly one non-blocking `App::run_iteration` and
-  returns immediately. The host owns the 16 ms timer.
-- Create and pump Tauri on the host's main OS thread. Every call on a given
-  instance must happen on the thread that created it.
+- `tauriless_create` creates only the bridge state. Build `tauri::App` lazily on
+  the first `plugin:webview|create_webview_window` request. Before that build,
+  `tauriless_drain` only flushes bridge-owned outbox messages; after the build it
+  performs exactly one non-blocking `App::run_iteration` per call. The host owns
+  the 16 ms timer.
+- Create the bridge and lazily build/pump Tauri on the host's main OS thread.
+  Every call on a given instance must happen on the thread that created it.
 - Keep the foreign interface to opaque instance pointers plus NUL-terminated
   UTF-8 JSON strings. Do not mirror Tauri's resource table in the bridge.
 - Windows and webviews remain owned by Tauri and are addressed by Tauri labels.
@@ -37,9 +40,13 @@ experimental `node:ffi` module.
   that asset response, Windows `tauriless:set-app-user-model-id`, the initial
   window creation, and exact-name event subscribe/unsubscribe. The Windows
   process control must call `SetCurrentProcessExplicitAppUserModelID` directly
-  and remain available before the first webview exists. Its canonical payload is
-  `{ "appId": "..." }` (`appID` remains an accepted alias), and it returns its
-  HRESULT outcome through the normal result message.
+  and remain available only before the lazy Tauri app build. Its canonical
+  payload is `{ "appId": "..." }` (`appID` remains an accepted alias), and it
+  returns its HRESULT outcome through the normal result message. Persist the
+  successful value in bridge state and copy it into
+  `generate_context!().config_mut().identifier` immediately before
+  `Builder::build`; if the command is never sent, leave Tauri's default
+  identifier untouched. Reject attempts to change it after the app is built.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted

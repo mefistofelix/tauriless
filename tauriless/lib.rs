@@ -102,6 +102,8 @@ struct SetAppUserModelIdPayload {
 /// The single opaque object held by foreign-language hosts.
 pub struct Tauriless {
     app: Option<tauri::App>,
+    app_user_model_id: Option<String>,
+    closed: bool,
     owner: ThreadId,
     outbox: Outbox,
     asset_protocol: asset_protocol::AssetProtocol,
@@ -117,43 +119,12 @@ impl Tauriless {
             Arc::clone(&outbox),
             FORWARDED_EVENT_NAMES,
         );
-        let event_plugin = event_forwarder(Arc::clone(&event_subscriptions));
-        let channel_outbox = Arc::clone(&outbox);
         let asset_protocol = asset_protocol::AssetProtocol::new(Arc::clone(&outbox));
-        let builder = tauri::Builder::default()
-            .plugin(event_plugin)
-            .plugin(tauri_plugin_notification::init())
-            .plugin(tauri_plugin_opener::init())
-            .plugin(tauri_plugin_os::init())
-            .plugin(tauri_plugin_positioner::init())
-            .plugin(tauri_plugin_store::Builder::default().build());
-        let app = asset_protocol
-            .register(builder)
-            .channel_interceptor(move |webview, callback, index, body| {
-                push(
-                    &channel_outbox,
-                    json!({
-                      "kind": "channel",
-                      "webview": webview.label(),
-                      "id": callback.0,
-                      "index": index,
-                      "message": response_body(body)
-                    }),
-                );
-                // This experiment routes every Tauri Channel<T> to the host.
-                // Returning true prevents the normal JavaScript delivery.
-                true
-            })
-            .build(tauri::generate_context!())?;
-
-        // Complete Tauri setup without creating a bootstrap window or webview.
-        let mut app = app;
-        let setup_outbox = Arc::clone(&outbox);
-        #[allow(deprecated)]
-        app.run_iteration(move |_app, event| collect_event(&setup_outbox, event));
 
         Ok(Self {
-            app: Some(app),
+            app: None,
+            app_user_model_id: None,
+            closed: false,
             owner: thread::current().id(),
             outbox,
             asset_protocol,
@@ -172,9 +143,15 @@ impl Tauriless {
         validate(&request)?;
 
         if request.cmd == SET_APP_USER_MODEL_ID_COMMAND {
-            let outcome = set_current_process_app_user_model_id(request.payload)
-                .map(|_| Value::Null)
-                .map_err(Value::String);
+            let outcome = if self.app.is_some() {
+                Err("AppUserModelID must be set before the Tauri app is initialized".into())
+            } else {
+                set_current_process_app_user_model_id(request.payload).map(|app_id| {
+                    self.app_user_model_id = Some(app_id);
+                    Value::Null
+                })
+            }
+            .map_err(Value::String);
             result(&self.outbox, request.id, outcome);
             return Ok(());
         }
@@ -198,6 +175,10 @@ impl Tauriless {
                 .map_err(Value::String);
             result(&self.outbox, request.id, outcome);
             return Ok(());
+        }
+
+        if self.app.is_none() {
+            return self.create_first_webview(request);
         }
 
         let webviews = self.app()?.webview_windows();
@@ -238,12 +219,11 @@ impl Tauriless {
         }
         self.draining = true;
 
-        let outbox = Arc::clone(&self.outbox);
-        #[allow(deprecated)]
-        self.app
-            .as_mut()
-            .ok_or(Error::Shutdown)?
-            .run_iteration(move |_app, event| collect_event(&outbox, event));
+        if let Some(app) = self.app.as_mut() {
+            let outbox = Arc::clone(&self.outbox);
+            #[allow(deprecated)]
+            app.run_iteration(move |_app, event| collect_event(&outbox, event));
+        }
 
         let messages = std::mem::take(&mut *self.outbox.lock().expect("outbox mutex poisoned"));
         self.draining = false;
@@ -252,6 +232,9 @@ impl Tauriless {
 
     pub fn shutdown(&mut self) -> Result<()> {
         self.check_thread()?;
+        if self.closed {
+            return Ok(());
+        }
         self.event_subscriptions
             .lock()
             .expect("event subscriptions mutex poisoned")
@@ -259,6 +242,7 @@ impl Tauriless {
         if let Some(app) = self.app.take() {
             app.cleanup_before_exit();
         }
+        self.closed = true;
         Ok(())
     }
 
@@ -266,8 +250,9 @@ impl Tauriless {
         self.app.as_ref().ok_or(Error::Shutdown)
     }
 
-    fn create_first_webview(&self, request: Request) -> Result<()> {
+    fn create_first_webview(&mut self, request: Request) -> Result<()> {
         require_initial_create_command(&request)?;
+        self.build_app()?;
 
         let app = self.app()?;
         let outcome = serde_json::from_value::<CreateWebviewWindowPayload>(request.payload)
@@ -283,6 +268,52 @@ impl Tauriless {
         Ok(())
     }
 
+    fn build_app(&mut self) -> Result<()> {
+        if self.app.is_some() {
+            return Ok(());
+        }
+
+        let event_plugin = event_forwarder(Arc::clone(&self.event_subscriptions));
+        let channel_outbox = Arc::clone(&self.outbox);
+        let builder = tauri::Builder::default()
+            .plugin(event_plugin)
+            .plugin(tauri_plugin_notification::init())
+            .plugin(tauri_plugin_opener::init())
+            .plugin(tauri_plugin_os::init())
+            .plugin(tauri_plugin_positioner::init())
+            .plugin(tauri_plugin_store::Builder::default().build());
+        let mut context = tauri::generate_context!();
+        if let Some(app_id) = &self.app_user_model_id {
+            context.config_mut().identifier = app_id.clone();
+        }
+        let mut app = self
+            .asset_protocol
+            .register(builder)
+            .channel_interceptor(move |webview, callback, index, body| {
+                push(
+                    &channel_outbox,
+                    json!({
+                      "kind": "channel",
+                      "webview": webview.label(),
+                      "id": callback.0,
+                      "index": index,
+                      "message": response_body(body)
+                    }),
+                );
+                // This experiment routes every Tauri Channel<T> to the host.
+                // Returning true prevents the normal JavaScript delivery.
+                true
+            })
+            .build(context)?;
+
+        // Complete Tauri setup without creating a bootstrap window or webview.
+        let setup_outbox = Arc::clone(&self.outbox);
+        #[allow(deprecated)]
+        app.run_iteration(move |_app, event| collect_event(&setup_outbox, event));
+        self.app = Some(app);
+        Ok(())
+    }
+
     fn check_thread(&self) -> Result<()> {
         if thread::current().id() == self.owner {
             Ok(())
@@ -292,17 +323,22 @@ impl Tauriless {
     }
 
     fn check_running(&self) -> Result<()> {
-        self.app.as_ref().map(|_| ()).ok_or(Error::Shutdown)
+        if self.closed {
+            Err(Error::Shutdown)
+        } else {
+            Ok(())
+        }
     }
 }
 
-fn set_current_process_app_user_model_id(payload: Value) -> std::result::Result<(), String> {
+fn set_current_process_app_user_model_id(payload: Value) -> std::result::Result<String, String> {
     let payload: SetAppUserModelIdPayload =
         serde_json::from_value(payload).map_err(|error| error.to_string())?;
     if payload.app_id.contains('\0') {
         return Err("appId must not contain a NUL character".into());
     }
-    set_current_process_explicit_app_user_model_id(&payload.app_id)
+    set_current_process_explicit_app_user_model_id(&payload.app_id)?;
+    Ok(payload.app_id)
 }
 
 #[cfg(windows)]
@@ -652,5 +688,22 @@ mod tests {
 
         assert_eq!(camel.app_id, "com.example.app");
         assert_eq!(win32.app_id, "com.example.app");
+    }
+
+    #[test]
+    fn bridge_can_drain_before_tauri_app_is_built() {
+        let mut runtime = Tauriless::new().unwrap();
+        assert!(runtime.app.is_none());
+        assert_eq!(
+            serde_json::from_slice::<Value>(&runtime.drain().unwrap()).unwrap(),
+            json!({ "messages": [] })
+        );
+    }
+
+    #[test]
+    fn tauri_context_identifier_is_mutable_before_build() {
+        let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
+        context.config_mut().identifier = "com.example.lazy".into();
+        assert_eq!(context.config().identifier, "com.example.lazy");
     }
 }

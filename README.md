@@ -22,18 +22,22 @@ batch = tauriless_drain(runtime);
 tauriless_destroy(runtime);
 ```
 
-Tauriless starts with no window or webview and uses the unmodified Tauri crate.
-The first forwarded Tauri request must be `plugin:webview|create_webview_window`;
-the bridge deserializes its upstream `WindowConfig` payload and calls
-`WebviewWindowBuilder::from_config(...).build()`. Bridge-owned controls, including
-the Windows process AppUserModelID control, may run before it. Once a real
-webview exists, all forwarded requests reuse Tauri's own `Webview::on_message`
-dispatcher, ACL, plugin commands, resource table, invoke responses, and channels.
+`tauriless_create` initially creates only the Tauriless bridge state: no
+`tauri::App`, window, or webview exists yet. The first forwarded Tauri request
+must be `plugin:webview|create_webview_window`; at that point Tauriless lazily
+builds the unmodified Tauri app, then deserializes the upstream `WindowConfig`
+and calls `WebviewWindowBuilder::from_config(...).build()`. Bridge-owned
+controls, including the Windows process AppUserModelID control, can run before
+that lazy build. Once a real webview exists, all forwarded requests reuse Tauri's
+own `Webview::on_message` dispatcher, ACL, plugin commands, resource table,
+invoke responses, and channels.
 
-`tauriless_drain` performs exactly one `App::run_iteration`, collects completed
-IPC responses, Tauri events, and Tauri channel messages, and returns one UTF-8
-JSON batch. It never invokes a foreign callback from Rust and it never starts a
-GUI thread.
+Before the lazy app build, `tauriless_drain` simply returns bridge-owned outbox
+messages, so configuration requests can use the normal send/result protocol.
+After the app exists, every drain additionally performs exactly one
+`App::run_iteration`, collects completed IPC responses, Tauri events, and Tauri
+channel messages, and returns one UTF-8 JSON batch. It never invokes a foreign
+callback from Rust and it never starts a GUI thread.
 
 Every operation on an instance, including destruction, must happen on the OS
 thread that called `tauriless_create`; for GUI hosts this must be the main
@@ -89,7 +93,7 @@ standard `WebviewWindowBuilder`, and its result is returned by a later drain.
 ### Windows process AppUserModelID
 
 On Windows, the host can set the current process explicit AppUserModelID through
-the existing `send()` ABI before creating the first window:
+the existing `send()` ABI before the lazy Tauri app build:
 
 ```json
 {
@@ -100,10 +104,17 @@ the existing `send()` ABI before creating the first window:
 ```
 
 The bridge calls `SetCurrentProcessExplicitAppUserModelID(appId)` directly in
-`shell32.dll`. `appID` is accepted as an alias for `appId`. Success is returned
-as the normal `kind: "result"` message with `value: null`; a failing HRESULT is
-returned through the same result with `ok: false`. On non-Windows platforms the
-command returns an unsupported-platform result instead of affecting Tauri.
+`shell32.dll` and stores the successful value until Tauri is built. Immediately
+before `Builder::build`, Tauriless assigns the same value to
+`generate_context!().config_mut().identifier`, so Tauri itself and
+`plugin:app|identifier` see the requested identifier. `appID` is accepted as an
+alias for `appId`. Success is returned as the normal `kind: "result"` message
+with `value: null`; a failing HRESULT is returned through the same result with
+`ok: false`. If no AppUserModelID command is sent, the generated Tauri context is
+left untouched and keeps its default identifier. Once the Tauri app has been
+built, changing the AppUserModelID is rejected to prevent the Windows process ID
+and Tauri config from diverging. On non-Windows platforms the command returns an
+unsupported-platform result instead of affecting Tauri.
 
 A Deno host should set it before the first webview and can then use the ordinary
 Tauri notification plugin once a webview exists:
@@ -117,14 +128,18 @@ await request("plugin:webview|create_webview_window", {
   options: { label: "main", title: "My App", url: "index.html" },
 });
 
+console.log(await request("plugin:app|identifier", {}));
+
 await request("plugin:notification|notify", {
   options: { title: "My App", body: "Notifica di prova" },
 });
 ```
 
-The AppUserModelID command is bridge-owned and therefore does not need a webview;
-`plugin:notification|notify` is an upstream Tauri plugin command and follows the
-normal forwarded-command rule, so a real webview must already exist.
+The AppUserModelID command is bridge-owned and therefore works while
+`tauri::App` is still absent; its result is queued in the bridge outbox and can
+be received by `drain()`. `plugin:app|identifier` and
+`plugin:notification|notify` are upstream Tauri commands and follow the normal
+forwarded-command rule, so a real webview must already exist.
 
 After creation, `webview` selects a stable `WebviewWindow` source context; child
 webviews are intentionally ignored. If omitted, the only existing webview window

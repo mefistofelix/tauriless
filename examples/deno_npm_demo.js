@@ -414,6 +414,14 @@ async function createDemo() {
   clearTimeout(readyTimeout);
 
   if (Deno.build.os === "windows") {
+    const identifier = await request("plugin:app|identifier");
+    console.error(`[verifica] Tauri config identifier: ${identifier}`);
+    if (identifier !== APP_USER_MODEL_ID) {
+      throw new Error(
+        `identifier Tauri inatteso: ${identifier} != ${APP_USER_MODEL_ID}`,
+      );
+    }
+
     console.error("[fase] notifica Windows di prova…");
     await notify(
       "Tauriless",
