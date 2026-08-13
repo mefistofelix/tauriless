@@ -1,6 +1,7 @@
 // Minimal single-file smoke app for the public precompiled npm package.
 // After publishing the version below, compile from the repository root with:
-//   deno compile --allow-ffi --allow-env --icon tauriless/icons/icon.ico \
+//   deno compile --minimum-dependency-age=0 --allow-ffi --allow-env \
+//     --icon tauriless/icons/icon.ico \
 //     --output .build/tauriless-deno-smoke.exe examples/deno_compiled_npm_smoke.js
 
 import { Tauriless } from "npm:@mefistofelix/tauriless@0.1.11";
