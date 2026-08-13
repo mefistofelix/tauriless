@@ -125,7 +125,12 @@ await request("tauriless:set-app-user-model-id", {
 });
 
 await request("plugin:webview|create_webview_window", {
-  options: { label: "main", title: "My App", url: "index.html" },
+  options: {
+    label: "main",
+    title: "My App",
+    url: "index.html",
+    dataDirectory: "Tauriless/MyApp",
+  },
 });
 
 console.log(await request("plugin:app|identifier", {}));
@@ -137,9 +142,14 @@ await request("plugin:notification|notify", {
 
 The AppUserModelID command is bridge-owned and therefore works while
 `tauri::App` is still absent; its result is queued in the bridge outbox and can
-be received by `drain()`. `plugin:app|identifier` and
-`plugin:notification|notify` are upstream Tauri commands and follow the normal
-forwarded-command rule, so a real webview must already exist.
+be received by `drain()`. On Windows, Tauriless explicitly reapplies a supplied
+relative `dataDirectory` to the first `WebviewWindowBuilder`; this keeps WebView2
+storage independent from a custom Tauri identifier, including path-like
+AppUserModelIDs. Absolute paths and `..` components are rejected. This also
+works around Tauri 2.11.5 dropping `WindowConfig.data_directory` while converting
+the first window config into runtime webview attributes. `plugin:app|identifier`
+and `plugin:notification|notify` are upstream Tauri commands and follow the
+normal forwarded-command rule, so a real webview must already exist.
 
 After creation, `webview` selects a stable `WebviewWindow` source context; child
 webviews are intentionally ignored. If omitted, the only existing webview window

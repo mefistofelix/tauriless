@@ -47,6 +47,12 @@ experimental `node:ffi` module.
   `generate_context!().config_mut().identifier` immediately before
   `Builder::build`; if the command is never sent, leave Tauri's default
   identifier untouched. Reject attempts to change it after the app is built.
+  On Windows, if the initial upstream `WindowConfig` supplies a relative
+  `dataDirectory`, reapply its resolved LocalData path explicitly through
+  `WebviewWindowBuilder::data_directory` before `build()`. Tauri 2.11.5 loses
+  this field while converting `WindowConfig` into runtime webview attributes;
+  keep this workaround local to Tauriless rather than patching Tauri upstream,
+  and reject absolute/parent-traversing data-directory values.
 - Forward host requests to Tauri's own `Webview::on_message` dispatcher using
   native Tauri command names and payloads after the first real webview exists.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted

@@ -258,8 +258,24 @@ impl Tauriless {
         let outcome = serde_json::from_value::<CreateWebviewWindowPayload>(request.payload)
             .map_err(|error| error.to_string())
             .and_then(|payload| {
-                WebviewWindowBuilder::from_config(app.handle(), &payload.options)
-                    .and_then(|builder| builder.build())
+                let mut builder = WebviewWindowBuilder::from_config(app.handle(), &payload.options)
+                    .map_err(|error| error.to_string())?;
+
+                #[cfg(windows)]
+                if let Some(relative) = &payload.options.data_directory {
+                    let local_data = app
+                        .path()
+                        .local_data_dir()
+                        .map_err(|error| error.to_string())?;
+                    builder = builder.data_directory(resolved_initial_webview_data_directory(
+                        &local_data,
+                        &payload.options.label,
+                        relative,
+                    )?);
+                }
+
+                builder
+                    .build()
                     .map(|_| Value::Null)
                     .map_err(|error| error.to_string())
             });
@@ -329,6 +345,22 @@ impl Tauriless {
             Ok(())
         }
     }
+}
+
+#[cfg(windows)]
+fn resolved_initial_webview_data_directory(
+    local_data: &std::path::Path,
+    label: &str,
+    relative: &std::path::Path,
+) -> std::result::Result<std::path::PathBuf, String> {
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err("dataDirectory must be a safe relative path".into());
+    }
+    Ok(local_data.join(label).join(relative))
 }
 
 fn set_current_process_app_user_model_id(payload: Value) -> std::result::Result<String, String> {
@@ -677,6 +709,33 @@ mod tests {
         )
         .unwrap();
         require_initial_create_command(&accepted).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn initial_webview_data_directory_is_resolved_and_confined() {
+        let local_data = std::path::Path::new(r"C:\Users\test\AppData\Local");
+        assert_eq!(
+            resolved_initial_webview_data_directory(
+                local_data,
+                "main",
+                std::path::Path::new(r"profiles\webview"),
+            )
+            .unwrap(),
+            local_data.join("main").join(r"profiles\webview")
+        );
+        assert!(resolved_initial_webview_data_directory(
+            local_data,
+            "main",
+            std::path::Path::new(r"..\escape"),
+        )
+        .is_err());
+        assert!(resolved_initial_webview_data_directory(
+            local_data,
+            "main",
+            std::path::Path::new(r"C:\absolute"),
+        )
+        .is_err());
     }
 
     #[test]
