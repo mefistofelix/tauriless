@@ -275,13 +275,17 @@ pub enum AppState {}
 
 impl AppState {
   pub fn set_run_timeout(timeout: Option<Duration>) {
-    HANDLER.set_run_timeout(timeout.map(|timeout| {
+    let timeout = timeout.map(|timeout| {
       if timeout.is_zero() {
         RunTimeout::BeforeWait
       } else {
         RunTimeout::AfterWait(Instant::now() + timeout)
       }
-    }));
+    });
+    HANDLER.set_run_timeout(timeout);
+    if timeout.is_none() {
+      HANDLER.waker().stop();
+    }
   }
 
   pub fn should_exit() -> bool {
@@ -364,7 +368,6 @@ impl AppState {
         let app = NSApp(mtm);
         let _pool = NSAutoreleasePool::new();
         let () = msg_send![&app, stop: nil];
-        post_dummy_event(&app);
       }
     }
     let start = HANDLER.get_start_time().unwrap();
@@ -443,14 +446,17 @@ impl AppState {
     }
     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawEventsCleared));
     HANDLER.set_in_callback(false);
-    if HANDLER.should_exit() || matches!(HANDLER.run_timeout(), Some(RunTimeout::BeforeWait)) {
+    let should_exit = HANDLER.should_exit();
+    if should_exit || matches!(HANDLER.run_timeout(), Some(RunTimeout::BeforeWait)) {
       unsafe {
         let mtm = MainThreadMarker::new().unwrap();
         let app = NSApp(mtm);
         let _pool = NSAutoreleasePool::new();
         let () = msg_send![&app, stop: nil];
-        // To stop event loop immediately, we need to post some event here.
-        post_dummy_event(&app);
+        if should_exit {
+          // To stop a regular event loop immediately, we need to post some event here.
+          post_dummy_event(&app);
+        }
       };
     }
     HANDLER.update_start_time();
