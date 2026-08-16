@@ -5,7 +5,8 @@ on:
     inputs:
       ssh_public_key:
         description: Ephemeral SSH public key allowed to access the runner
-        required: true
+        required: false
+        default: ''
         type: string
 
 permissions:
@@ -46,6 +47,7 @@ jobs:
         run: cargo test --manifest-path tauriless/Cargo.toml --locked
 
       - name: Start private SSH and Pigeons roost
+        if: inputs.ssh_public_key != ''
         shell: bash
         env:
           SSH_PUBLIC_KEY: ${{ inputs.ssh_public_key }}
@@ -115,6 +117,7 @@ jobs:
           echo "Runner: $(uname -a)"
 
       - name: Publish connection information
+        if: inputs.ssh_public_key != ''
         uses: actions/upload-artifact@v4
         with:
           name: pigeons-connection
@@ -125,6 +128,7 @@ jobs:
           if-no-files-found: error
 
       - name: Keep runner alive
+        if: inputs.ssh_public_key != ''
         shell: bash
         run: |
           echo 'Runner ready through Pigeons/Iroh; cancel this workflow when debugging is complete.'
