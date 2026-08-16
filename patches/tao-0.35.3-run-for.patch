@@ -1,3 +1,68 @@
+diff --git a/examples/run_for_probe.rs b/examples/run_for_probe.rs
+new file mode 100644
+index 0000000..038c14c
+--- /dev/null
++++ b/examples/run_for_probe.rs
+@@ -0,0 +1,59 @@
++use std::{
++  thread,
++  time::{Duration, Instant},
++};
++use tao::{
++  event::Event,
++  event_loop::{ControlFlow, EventLoopBuilder},
++};
++
++fn run_for(event_loop: &mut tao::event_loop::EventLoop<()>, timeout: Duration) -> Duration {
++  let start = Instant::now();
++  event_loop.run_for(timeout, |_, _, control_flow| {
++    *control_flow = ControlFlow::Wait;
++  });
++  start.elapsed()
++}
++
++fn main() {
++  let mut event_loop = EventLoopBuilder::<()>::with_user_event().build();
++
++  let bootstrap = run_for(&mut event_loop, Duration::from_millis(50));
++  println!("bootstrap: {} ms", bootstrap.as_millis());
++
++  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
++  println!("warm-up: {} ms", elapsed.as_millis());
++  assert!(elapsed < Duration::from_millis(500));
++
++  for i in 1..=3 {
++    let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
++    println!("timeout {i}: {} ms", elapsed.as_millis());
++    assert!(elapsed >= Duration::from_millis(35));
++    assert!(elapsed < Duration::from_millis(500));
++  }
++
++  let proxy = event_loop.create_proxy();
++  thread::spawn(move || {
++    thread::sleep(Duration::from_millis(25));
++    proxy.send_event(()).unwrap();
++  });
++
++  let start = Instant::now();
++  let mut received = false;
++  event_loop.run_for(Duration::from_millis(500), |event, _, control_flow| {
++    *control_flow = ControlFlow::Wait;
++    if matches!(event, Event::UserEvent(())) {
++      received = true;
++    }
++  });
++  let elapsed = start.elapsed();
++  println!("native wake: {} ms", elapsed.as_millis());
++  assert!(received);
++  assert!(elapsed >= Duration::from_millis(10));
++  assert!(elapsed < Duration::from_millis(300));
++
++  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
++  println!("post-wake timeout: {} ms", elapsed.as_millis());
++  assert!(elapsed >= Duration::from_millis(35));
++  assert!(elapsed < Duration::from_millis(500));
++}
 diff --git a/src/event_loop.rs b/src/event_loop.rs
 index 6e3406d..e985fad 100644
 --- a/src/event_loop.rs
@@ -225,7 +290,7 @@ index 4e9fe97..ee61181 100644
          exit_code
        })
 diff --git a/src/platform_impl/macos/app_state.rs b/src/platform_impl/macos/app_state.rs
-index 03dff91..93557af 100644
+index 03dff91..1e76e2d 100644
 --- a/src/platform_impl/macos/app_state.rs
 +++ b/src/platform_impl/macos/app_state.rs
 @@ -13,7 +13,7 @@ use std::{
@@ -374,7 +439,7 @@ index 03dff91..93557af 100644
      HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawRequested(window_id)));
    }
  
-@@ -390,33 +449,63 @@ impl AppState {
+@@ -390,33 +449,64 @@ impl AppState {
        return;
      }
      HANDLER.set_in_callback(true);
@@ -417,6 +482,7 @@ index 03dff91..93557af 100644
          post_dummy_event(&app);
        };
 +      if slice_return {
++        HANDLER.update_start_time();
 +        return;
 +      }
      }
@@ -505,21 +571,6 @@ index 8179ea9..aeb9c8e 100644
      };
      drop(self._callback.take());
  
-diff --git a/src/platform_impl/windows/event_loop/runner.rs b/src/platform_impl/windows/event_loop/runner.rs
-index ff865de..15a9409 100644
---- a/src/platform_impl/windows/event_loop/runner.rs
-+++ b/src/platform_impl/windows/event_loop/runner.rs
-@@ -92,6 +92,10 @@ impl<T> EventLoopRunner<T> {
-     assert!(old_event_handler.is_none());
-   }
- 
-+  pub(crate) fn clear_event_handler(&self) {
-+    self.event_handler.set(None);
-+  }
-+
-   pub(crate) fn reset_runner(&self) {
-     let EventLoopRunner {
-       thread_msg_target: _,
 diff --git a/src/platform_impl/windows/event_loop.rs b/src/platform_impl/windows/event_loop.rs
 index d580d0d..4e753e8 100644
 --- a/src/platform_impl/windows/event_loop.rs
@@ -611,68 +662,18 @@ index d580d0d..4e753e8 100644
      exit_code
    }
  
-diff --git a/examples/run_for_probe.rs b/examples/run_for_probe.rs
-new file mode 100644
-index 0000000..038c14c
---- /dev/null
-+++ b/examples/run_for_probe.rs
-@@ -0,0 +1,59 @@
-+use std::{
-+  thread,
-+  time::{Duration, Instant},
-+};
-+use tao::{
-+  event::Event,
-+  event_loop::{ControlFlow, EventLoopBuilder},
-+};
-+
-+fn run_for(event_loop: &mut tao::event_loop::EventLoop<()>, timeout: Duration) -> Duration {
-+  let start = Instant::now();
-+  event_loop.run_for(timeout, |_, _, control_flow| {
-+    *control_flow = ControlFlow::Wait;
-+  });
-+  start.elapsed()
-+}
-+
-+fn main() {
-+  let mut event_loop = EventLoopBuilder::<()>::with_user_event().build();
-+
-+  let bootstrap = run_for(&mut event_loop, Duration::from_millis(50));
-+  println!("bootstrap: {} ms", bootstrap.as_millis());
-+
-+  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
-+  println!("warm-up: {} ms", elapsed.as_millis());
-+  assert!(elapsed < Duration::from_millis(500));
-+
-+  for i in 1..=3 {
-+    let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
-+    println!("timeout {i}: {} ms", elapsed.as_millis());
-+    assert!(elapsed >= Duration::from_millis(35));
-+    assert!(elapsed < Duration::from_millis(500));
+diff --git a/src/platform_impl/windows/event_loop/runner.rs b/src/platform_impl/windows/event_loop/runner.rs
+index ff865de..15a9409 100644
+--- a/src/platform_impl/windows/event_loop/runner.rs
++++ b/src/platform_impl/windows/event_loop/runner.rs
+@@ -92,6 +92,10 @@ impl<T> EventLoopRunner<T> {
+     assert!(old_event_handler.is_none());
+   }
+ 
++  pub(crate) fn clear_event_handler(&self) {
++    self.event_handler.set(None);
 +  }
 +
-+  let proxy = event_loop.create_proxy();
-+  thread::spawn(move || {
-+    thread::sleep(Duration::from_millis(25));
-+    proxy.send_event(()).unwrap();
-+  });
-+
-+  let start = Instant::now();
-+  let mut received = false;
-+  event_loop.run_for(Duration::from_millis(500), |event, _, control_flow| {
-+    *control_flow = ControlFlow::Wait;
-+    if matches!(event, Event::UserEvent(())) {
-+      received = true;
-+    }
-+  });
-+  let elapsed = start.elapsed();
-+  println!("native wake: {} ms", elapsed.as_millis());
-+  assert!(received);
-+  assert!(elapsed >= Duration::from_millis(10));
-+  assert!(elapsed < Duration::from_millis(300));
-+
-+  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
-+  println!("post-wake timeout: {} ms", elapsed.as_millis());
-+  assert!(elapsed >= Duration::from_millis(35));
-+  assert!(elapsed < Duration::from_millis(500));
-+}
+   pub(crate) fn reset_runner(&self) {
+     let EventLoopRunner {
+       thread_msg_target: _,
