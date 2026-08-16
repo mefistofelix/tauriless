@@ -368,8 +368,9 @@ This inventory covers every plugin directory in the official
 [`plugins-workspace` v2](https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins)
 snapshot audited for this release. A plugin may expose commands or Rust callback
 builders without emitting a named event; those are not missing event names.
-Tauriless targets x86-64 Windows, macOS, and Linux only; Android and iOS plugin
-implementations and their plugin-listener events are intentionally excluded.
+Tauriless targets x86-64 Windows and Linux plus both Intel and Apple Silicon
+macOS; Android and iOS plugin implementations and their plugin-listener events
+are intentionally excluded.
 
 There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
@@ -448,10 +449,11 @@ command or Tauri patch is introduced.
 The single `npm/index.js` adapter selects Node `node:ffi`, Deno FFI, or
 `bun:ffi`; it contains no native addon. It is published publicly on the main npm
 registry as `@mefistofelix/tauriless` through Trusted Publishing. A release
-contains these x86-64 dynamic libraries in one tarball:
+contains these precompiled dynamic libraries in one tarball:
 
 - `native/win32-x64/tauriless.dll`
 - `native/darwin-x64/libtauriless.dylib`
+- `native/darwin-arm64/libtauriless.dylib`
 - `native/linux-x64/libtauriless.so`
 
 Install it from the normal npm registry:
@@ -586,26 +588,27 @@ servicing its other work between GUI iterations. Do not use
 instance must remain on the same main OS thread.
 
 `.github/workflows/release-native.yml` builds each binary on its matching native
-GitHub-hosted x86-64 runner: Windows Server, macOS Intel, and Ubuntu. There is
-no cross-compilation, Zig, custom SDK, or Docker involved. Pushing a `vX.Y.Z`
-tag creates a GitHub Release containing the three dynamic libraries, C header,
-and npm tarball. The Release is created first, and each native runner uploads
-its binary as soon as that build finishes.
+GitHub-hosted runner: Windows x64, macOS Intel, macOS Apple Silicon, and Linux
+x64. There is no cross-compilation, Zig, custom SDK, or Docker involved. Pushing
+a `vX.Y.Z` tag creates a GitHub Release containing the four dynamic libraries,
+C header, and npm tarball. The Release is created first, and each native runner
+uploads its binary as soon as that build finishes.
 
-After all three native builds succeed, the native workflow dispatches the separate
+After all four native builds succeed, the native workflow dispatches the separate
 `.github/workflows/publish-npm.yml` workflow. It downloads those exact release
-binaries, assembles the precompiled module, publishes it to GitHub Packages
-through the repository `GITHUB_TOKEN`, and attaches the npm tarball back to the
-Release.
+binaries, assembles the precompiled module, publishes it to the public npm
+registry through Trusted Publishing (OIDC), and attaches the npm tarball back to
+the Release.
 
 Both workflows are independently runnable from GitHub Actions. A manual native
 run accepts a release tag and one component: `prepare`, `windows`, `macos`,
 `linux`, or `all`. The npm workflow accepts an existing complete release tag,
 so a failed publication can be retried without rebuilding native libraries.
 Package versions are immutable once successfully published. The tag must match
-the Cargo version. ARM and musl are not release targets, and Linux consumers
-still need Tauri's GTK/WebKitGTK runtime libraries. No npmjs account, npm token,
-or repository secret is required for publishing.
+the Cargo version. ARM is a release target only on Apple Silicon macOS; musl is
+not a release target, and Linux consumers still need Tauri's GTK/WebKitGTK
+runtime libraries. No npm access token or repository secret is required for
+publishing.
 
 ## Python ctypes and asyncio example
 

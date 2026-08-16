@@ -5,7 +5,8 @@ Deno, and Bun. There is no Node-API addon and no JavaScript resource or callback
 layer.
 
 The package is published publicly on the npm registry, so consumers do not
-need a custom registry or authentication.
+need a custom registry or authentication. It bundles native libraries for
+Windows x64, Linux x64, and both Intel and Apple Silicon macOS.
 
 ```js
 import { Tauriless } from "npm:@mefistofelix/tauriless";

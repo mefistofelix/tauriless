@@ -85,10 +85,20 @@ jobs:
           gh release upload $env:RELEASE_TAG $asset --clobber
 
   macos:
-    name: macOS Intel release
+    name: macOS ${{ matrix.name }} release
     needs: prepare-release
     if: github.event_name == 'push' || inputs.component == 'all' || inputs.component == 'macos'
-    runs-on: macos-15-intel
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Intel
+            runner: macos-15-intel
+            arch: x64
+          - name: Apple Silicon
+            runner: macos-15
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
@@ -102,7 +112,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${RELEASE_TAG#v}"
-          asset="tauriless-v${version}-macos-x64.dylib"
+          asset="tauriless-v${version}-macos-${{ matrix.arch }}.dylib"
           cp tauriless/target/release/libtauriless.dylib "$asset"
           gh release upload "$RELEASE_TAG" "$asset" --clobber
 

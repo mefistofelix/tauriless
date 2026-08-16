@@ -6,6 +6,7 @@ const encoder = new TextEncoder();
 const deno = typeof globalThis.Deno?.dlopen === "function";
 const bun = !deno && typeof globalThis.Bun?.version === "string";
 const libraries = {
+  "darwin-arm64": "libtauriless.dylib",
   "darwin-x64": "libtauriless.dylib",
   "linux-x64": "libtauriless.so",
   "win32-x64": "tauriless.dll",
@@ -16,7 +17,11 @@ function nativeLibraryPath() {
     ? (Deno.build.os === "windows" ? "win32" : Deno.build.os)
     : process.platform;
   const arch = deno
-    ? (Deno.build.arch === "x86_64" ? "x64" : Deno.build.arch)
+    ? (Deno.build.arch === "x86_64"
+      ? "x64"
+      : Deno.build.arch === "aarch64"
+      ? "arm64"
+      : Deno.build.arch)
     : process.arch;
   let override;
   try {

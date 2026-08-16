@@ -117,8 +117,9 @@ experimental `node:ffi` module.
 - Publish it publicly to the main npm registry as `@mefistofelix/tauriless`
   through npm Trusted Publishing (OIDC). The publish workflow must request
   `id-token: write` and must not depend on an npm access token.
-- Supported release targets are x86-64 Windows MSVC, macOS Intel, and Linux
-  glibc. ARM and musl are intentionally out of scope.
+- Supported release targets are x86-64 Windows MSVC, macOS Intel, macOS Apple
+  Silicon, and x86-64 Linux glibc. ARM is intentionally out of scope except for
+  Apple Silicon macOS; musl is out of scope.
 - Android and iOS are out of scope. Do not add mobile-only plugin APIs or map
   mobile plugin-listener events into the desktop bridge.
 - Keep the npm JavaScript adapter in one file and bind exactly the five C ABI
@@ -128,7 +129,7 @@ experimental `node:ffi` module.
 - Follow the TDLib receive lifetime pattern: Rust owns the NUL-terminated drain
   JSON and may replace it on the next drain or destroy. Every host must copy or
   decode it synchronously before that point; no exported buffer-free function.
-- Build each release binary on its matching GitHub-hosted x86-64 runner and
+- Build each release binary on its matching native GitHub-hosted runner and
   publish them in a GitHub Release. A separate release-triggered workflow
   downloads those binaries and publishes the single npm tarball. Do not mix npm
   publishing into a native build job, and do not cross-compile unless native
