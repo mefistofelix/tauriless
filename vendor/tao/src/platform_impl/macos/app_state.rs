@@ -57,7 +57,7 @@ impl<'a, Never> Event<'a, Never> {
 pub trait EventHandler: Debug {
   // Not sure probably it should accept Event<'static, Never>
   fn handle_nonuser_event(&mut self, event: Event<'_, Never>, control_flow: &mut ControlFlow);
-  fn handle_user_events(&mut self, control_flow: &mut ControlFlow);
+  fn handle_user_events(&mut self, control_flow: &mut ControlFlow) -> bool;
 }
 
 struct EventLoopHandler<T: 'static> {
@@ -106,9 +106,11 @@ impl<T> EventHandler for EventLoopHandler<T> {
     });
   }
 
-  fn handle_user_events(&mut self, control_flow: &mut ControlFlow) {
+  fn handle_user_events(&mut self, control_flow: &mut ControlFlow) -> bool {
+    let mut handled = false;
     self.with_callback(|this, mut callback| {
       for event in this.window_target.p.receiver.try_iter() {
+        handled = true;
         if let ControlFlow::ExitWithCode(code) = *control_flow {
           let dummy = &mut ControlFlow::ExitWithCode(code);
           (callback)(Event::UserEvent(event), &this.window_target, dummy);
@@ -117,6 +119,7 @@ impl<T> EventHandler for EventLoopHandler<T> {
         }
       }
     });
+    handled
   }
 }
 
@@ -130,6 +133,7 @@ enum RunTimeout {
 struct Handler {
   ready: AtomicBool,
   in_callback: AtomicBool,
+  slice_work: AtomicBool,
   run_timeout: Mutex<Option<RunTimeout>>,
   control_flow: Mutex<ControlFlow>,
   control_flow_prev: Mutex<ControlFlow>,
@@ -207,6 +211,14 @@ impl Handler {
     self.in_callback.store(in_callback, Ordering::Release);
   }
 
+  fn mark_slice_work(&self) {
+    self.slice_work.store(true, Ordering::Release);
+  }
+
+  fn take_slice_work(&self) -> bool {
+    self.slice_work.swap(false, Ordering::AcqRel)
+  }
+
   fn run_timeout(&self) -> Option<RunTimeout> {
     *self.run_timeout.lock().unwrap()
   }
@@ -226,9 +238,11 @@ impl Handler {
     }
   }
 
-  fn handle_user_events(&self) {
+  fn handle_user_events(&self) -> bool {
     if let Some(ref mut callback) = *self.callback.lock().unwrap() {
-      callback.handle_user_events(&mut self.control_flow.lock().unwrap());
+      callback.handle_user_events(&mut self.control_flow.lock().unwrap())
+    } else {
+      false
     }
   }
 
@@ -283,6 +297,7 @@ impl AppState {
       }
     });
     HANDLER.set_run_timeout(timeout);
+    HANDLER.take_slice_work();
     if timeout.is_none() {
       HANDLER.waker().stop();
     }
@@ -344,10 +359,12 @@ impl AppState {
   }
 
   pub fn open_urls(urls: Vec<url::Url>) {
+    HANDLER.mark_slice_work();
     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::Opened { urls }));
   }
 
   pub fn reopen(has_visible_windows: bool) {
+    HANDLER.mark_slice_work();
     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::Reopen {
       has_visible_windows,
     }));
@@ -360,15 +377,6 @@ impl AppState {
     // Return when in callback due to https://github.com/rust-windowing/winit/issues/1779
     if panic_info.is_panicking() || !HANDLER.is_ready() || HANDLER.get_in_callback() {
       return;
-    }
-    if matches!(HANDLER.run_timeout(), Some(RunTimeout::AfterWait(_))) {
-      HANDLER.waker().stop();
-      unsafe {
-        let mtm = MainThreadMarker::new().unwrap();
-        let app = NSApp(mtm);
-        let _pool = NSAutoreleasePool::new();
-        let () = msg_send![&app, stop: nil];
-      }
     }
     let start = HANDLER.get_start_time().unwrap();
     let cause = match HANDLER.get_control_flow_and_update_prev() {
@@ -410,6 +418,7 @@ impl AppState {
   }
 
   pub fn handle_redraw(window_id: WindowId) {
+    HANDLER.mark_slice_work();
     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawRequested(window_id)));
   }
 
@@ -436,18 +445,30 @@ impl AppState {
       return;
     }
     HANDLER.set_in_callback(true);
-    HANDLER.handle_user_events();
-    for event in HANDLER.take_events() {
+    let mut slice_work = HANDLER.handle_user_events() || HANDLER.take_slice_work();
+    let events = HANDLER.take_events();
+    slice_work |= !events.is_empty();
+    for event in events {
       HANDLER.handle_nonuser_event(event);
     }
     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::MainEventsCleared));
-    for window_id in HANDLER.should_redraw() {
+    let redraw = HANDLER.should_redraw();
+    slice_work |= !redraw.is_empty();
+    for window_id in redraw {
       HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawRequested(window_id)));
     }
     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawEventsCleared));
     HANDLER.set_in_callback(false);
     let should_exit = HANDLER.should_exit();
-    if should_exit || matches!(HANDLER.run_timeout(), Some(RunTimeout::BeforeWait)) {
+    let slice_return = match HANDLER.run_timeout() {
+      Some(RunTimeout::BeforeWait) => true,
+      Some(RunTimeout::AfterWait(deadline)) => slice_work || Instant::now() >= deadline,
+      None => false,
+    };
+    if should_exit || slice_return {
+      if slice_return {
+        HANDLER.waker().stop();
+      }
       unsafe {
         let mtm = MainThreadMarker::new().unwrap();
         let app = NSApp(mtm);
@@ -458,6 +479,9 @@ impl AppState {
           post_dummy_event(&app);
         }
       };
+      if slice_return {
+        return;
+      }
     }
     HANDLER.update_start_time();
     let (old, new) = HANDLER.get_old_and_new_control_flow();
