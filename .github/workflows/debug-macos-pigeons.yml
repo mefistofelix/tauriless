@@ -36,6 +36,15 @@ jobs:
         with:
           deno-version: v2.9.5
 
+      - name: Probe repeated bounded native runs
+        run: cargo run --manifest-path vendor/tao/Cargo.toml --example run_for_probe -q
+
+      - name: Check Tauriless
+        run: cargo check --manifest-path tauriless/Cargo.toml --locked
+
+      - name: Test Tauriless
+        run: cargo test --manifest-path tauriless/Cargo.toml --locked
+
       - name: Start private SSH and Pigeons roost
         shell: bash
         env:
