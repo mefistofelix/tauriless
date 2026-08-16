@@ -1,0 +1,122 @@
+name: macOS Pigeons Debug
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_public_key:
+        description: Ephemeral SSH public key allowed to access the runner
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    name: Apple Silicon interactive
+    runs-on: macos-15
+    timeout-minutes: 360
+
+    steps:
+      - name: Check out Tauriless
+        uses: actions/checkout@v7
+
+      - name: Check out Tauri 2.11.5
+        uses: actions/checkout@v7
+        with:
+          repository: tauri-apps/tauri
+          ref: tauri-v2.11.5
+          path: tauri-src
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set up Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.5
+
+      - name: Start private SSH and Pigeons roost
+        shell: bash
+        env:
+          SSH_PUBLIC_KEY: ${{ inputs.ssh_public_key }}
+        run: |
+          set -euo pipefail
+
+          PIGEONS_VERSION=v0.2.1
+          curl -fL \
+            "https://github.com/n0-computer/pigeons/releases/download/${PIGEONS_VERSION}/pigeons-${PIGEONS_VERSION}-darwin-aarch64.tar.gz" \
+            -o "$RUNNER_TEMP/pigeons.tar.gz"
+          tar -xzf "$RUNNER_TEMP/pigeons.tar.gz" -C "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/pigeons"
+
+          ssh_dir="$RUNNER_TEMP/tauriless-ssh"
+          mkdir -p "$ssh_dir"
+          chmod 700 "$ssh_dir"
+          printf '%s\n' "$SSH_PUBLIC_KEY" > "$ssh_dir/authorized_keys"
+          chmod 600 "$ssh_dir/authorized_keys"
+          ssh-keygen -q -t ed25519 -N '' -f "$ssh_dir/host_key"
+
+          cat > "$ssh_dir/sshd_config" <<EOF
+          Port 2222
+          ListenAddress 127.0.0.1
+          HostKey $ssh_dir/host_key
+          PidFile $ssh_dir/sshd.pid
+          AuthorizedKeysFile $ssh_dir/authorized_keys
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          ChallengeResponseAuthentication no
+          PermitEmptyPasswords no
+          UsePAM no
+          StrictModes no
+          AllowUsers $USER
+          LogLevel VERBOSE
+          EOF
+
+          /usr/bin/env -i \
+            PATH="/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin" \
+            HOME="$HOME" USER="$USER" LOGNAME="$USER" \
+            /usr/sbin/sshd -D -e -f "$ssh_dir/sshd_config" \
+            > "$RUNNER_TEMP/sshd.log" 2>&1 &
+
+          for _ in {1..50}; do
+            if nc -z 127.0.0.1 2222; then break; fi
+            sleep 0.1
+          done
+          nc -z 127.0.0.1 2222
+
+          "$RUNNER_TEMP/pigeons" roost --ephemeral --ssh-port 2222 \
+            > "$RUNNER_TEMP/pigeons.log" 2>&1 &
+
+          endpoint=''
+          for _ in {1..100}; do
+            endpoint=$(sed -n 's/.*roost is running! id: \([0-9a-f]*\).*/\1/p' "$RUNNER_TEMP/pigeons.log" | head -n1)
+            if [[ -n "$endpoint" ]]; then break; fi
+            sleep 0.2
+          done
+          if [[ -z "$endpoint" ]]; then
+            cat "$RUNNER_TEMP/pigeons.log" >&2
+            exit 1
+          fi
+
+          printf '%s\n' "$endpoint" > "$RUNNER_TEMP/pigeons-endpoint.txt"
+          printf '%s\n' "$USER" > "$RUNNER_TEMP/ssh-user.txt"
+          echo "Pigeons endpoint: $endpoint"
+          echo "SSH user: $USER"
+          echo "Runner: $(uname -a)"
+
+      - name: Publish connection information
+        uses: actions/upload-artifact@v4
+        with:
+          name: pigeons-connection
+          path: |
+            ${{ runner.temp }}/pigeons-endpoint.txt
+            ${{ runner.temp }}/ssh-user.txt
+          retention-days: 1
+          if-no-files-found: error
+
+      - name: Keep runner alive
+        shell: bash
+        run: |
+          echo 'Runner ready through Pigeons/Iroh; cancel this workflow when debugging is complete.'
+          while true; do sleep 300; done
