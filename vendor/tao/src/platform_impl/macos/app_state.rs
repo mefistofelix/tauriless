@@ -475,10 +475,8 @@ impl AppState {
         let app = NSApp(mtm);
         let _pool = NSAutoreleasePool::new();
         let () = msg_send![&app, stop: nil];
-        if should_exit {
-          // To stop a regular event loop immediately, we need to post some event here.
-          post_dummy_event(&app);
-        }
+        // `stop:` only takes effect once AppKit processes another event.
+        post_dummy_event(&app);
       };
       if slice_return {
         return;
