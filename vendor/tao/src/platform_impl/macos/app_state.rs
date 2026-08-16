@@ -483,6 +483,7 @@ impl AppState {
         post_dummy_event(&app);
       };
       if slice_return {
+        HANDLER.update_start_time();
         return;
       }
     }
