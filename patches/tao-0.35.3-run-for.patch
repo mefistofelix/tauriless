@@ -225,7 +225,7 @@ index 4e9fe97..ee61181 100644
          exit_code
        })
 diff --git a/src/platform_impl/macos/app_state.rs b/src/platform_impl/macos/app_state.rs
-index 03dff91..fbb421d 100644
+index 03dff91..93557af 100644
 --- a/src/platform_impl/macos/app_state.rs
 +++ b/src/platform_impl/macos/app_state.rs
 @@ -13,7 +13,7 @@ use std::{
@@ -237,7 +237,33 @@ index 03dff91..fbb421d 100644
  };
  
  use objc2::{msg_send, rc::Retained, runtime::AnyObject as Object};
-@@ -120,10 +120,17 @@ impl<T> EventHandler for EventLoopHandler<T> {
+@@ -57,7 +57,7 @@ impl<'a, Never> Event<'a, Never> {
+ pub trait EventHandler: Debug {
+   // Not sure probably it should accept Event<'static, Never>
+   fn handle_nonuser_event(&mut self, event: Event<'_, Never>, control_flow: &mut ControlFlow);
+-  fn handle_user_events(&mut self, control_flow: &mut ControlFlow);
++  fn handle_user_events(&mut self, control_flow: &mut ControlFlow) -> bool;
+ }
+ 
+ struct EventLoopHandler<T: 'static> {
+@@ -106,9 +106,11 @@ impl<T> EventHandler for EventLoopHandler<T> {
+     });
+   }
+ 
+-  fn handle_user_events(&mut self, control_flow: &mut ControlFlow) {
++  fn handle_user_events(&mut self, control_flow: &mut ControlFlow) -> bool {
++    let mut handled = false;
+     self.with_callback(|this, mut callback| {
+       for event in this.window_target.p.receiver.try_iter() {
++        handled = true;
+         if let ControlFlow::ExitWithCode(code) = *control_flow {
+           let dummy = &mut ControlFlow::ExitWithCode(code);
+           (callback)(Event::UserEvent(event), &this.window_target, dummy);
+@@ -117,13 +119,22 @@ impl<T> EventHandler for EventLoopHandler<T> {
+         }
+       }
+     });
++    handled
    }
  }
  
@@ -251,14 +277,23 @@ index 03dff91..fbb421d 100644
  struct Handler {
    ready: AtomicBool,
    in_callback: AtomicBool,
++  slice_work: AtomicBool,
 +  run_timeout: Mutex<Option<RunTimeout>>,
    control_flow: Mutex<ControlFlow>,
    control_flow_prev: Mutex<ControlFlow>,
    start_time: Mutex<Option<Instant>>,
-@@ -200,6 +207,14 @@ impl Handler {
+@@ -200,6 +211,22 @@ impl Handler {
      self.in_callback.store(in_callback, Ordering::Release);
    }
  
++  fn mark_slice_work(&self) {
++    self.slice_work.store(true, Ordering::Release);
++  }
++
++  fn take_slice_work(&self) -> bool {
++    self.slice_work.swap(false, Ordering::AcqRel)
++  }
++
 +  fn run_timeout(&self) -> Option<RunTimeout> {
 +    *self.run_timeout.lock().unwrap()
 +  }
@@ -270,18 +305,41 @@ index 03dff91..fbb421d 100644
    fn handle_nonuser_event(&self, wrapper: EventWrapper) {
      if let Some(ref mut callback) = *self.callback.lock().unwrap() {
        match wrapper {
-@@ -259,6 +274,24 @@ impl Handler {
+@@ -211,9 +238,11 @@ impl Handler {
+     }
+   }
+ 
+-  fn handle_user_events(&self) {
++  fn handle_user_events(&self) -> bool {
+     if let Some(ref mut callback) = *self.callback.lock().unwrap() {
+-      callback.handle_user_events(&mut self.control_flow.lock().unwrap());
++      callback.handle_user_events(&mut self.control_flow.lock().unwrap())
++    } else {
++      false
+     }
+   }
+ 
+@@ -259,6 +288,33 @@ impl Handler {
  pub enum AppState {}
  
  impl AppState {
 +  pub fn set_run_timeout(timeout: Option<Duration>) {
-+    HANDLER.set_run_timeout(timeout.map(|timeout| {
++    let timeout = timeout.map(|timeout| {
 +      if timeout.is_zero() {
 +        RunTimeout::BeforeWait
 +      } else {
 +        RunTimeout::AfterWait(Instant::now() + timeout)
 +      }
-+    }));
++    });
++    HANDLER.set_run_timeout(timeout);
++    if timeout.is_some() {
++      HANDLER.take_slice_work();
++    }
++  }
++
++  pub fn clear_run_timeout() {
++    HANDLER.set_run_timeout(None);
++    HANDLER.waker().stop();
 +  }
 +
 +  pub fn should_exit() -> bool {
@@ -295,33 +353,72 @@ index 03dff91..fbb421d 100644
    pub fn set_callback<T>(
      callback: Weak<RefCell<dyn FnMut(Event<'_, T>, &RootWindowTarget<T>, &mut ControlFlow)>>,
      window_target: Rc<RootWindowTarget<T>>,
-@@ -324,6 +357,15 @@ impl AppState {
-     if panic_info.is_panicking() || !HANDLER.is_ready() || HANDLER.get_in_callback() {
+@@ -307,10 +363,12 @@ impl AppState {
+   }
+ 
+   pub fn open_urls(urls: Vec<url::Url>) {
++    HANDLER.mark_slice_work();
+     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::Opened { urls }));
+   }
+ 
+   pub fn reopen(has_visible_windows: bool) {
++    HANDLER.mark_slice_work();
+     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::Reopen {
+       has_visible_windows,
+     }));
+@@ -364,6 +422,7 @@ impl AppState {
+   }
+ 
+   pub fn handle_redraw(window_id: WindowId) {
++    HANDLER.mark_slice_work();
+     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawRequested(window_id)));
+   }
+ 
+@@ -390,33 +449,63 @@ impl AppState {
        return;
      }
-+    if matches!(HANDLER.run_timeout(), Some(RunTimeout::AfterWait(_))) {
-+      unsafe {
-+        let mtm = MainThreadMarker::new().unwrap();
-+        let app = NSApp(mtm);
-+        let _pool = NSAutoreleasePool::new();
-+        let () = msg_send![&app, stop: nil];
-+        post_dummy_event(&app);
-+      }
-+    }
-     let start = HANDLER.get_start_time().unwrap();
-     let cause = match HANDLER.get_control_flow_and_update_prev() {
-       ControlFlow::Poll => StartCause::Poll,
-@@ -400,7 +442,7 @@ impl AppState {
+     HANDLER.set_in_callback(true);
+-    HANDLER.handle_user_events();
+-    for event in HANDLER.take_events() {
++    let mut slice_work = HANDLER.handle_user_events();
++    slice_work |= HANDLER.take_slice_work();
++    let events = HANDLER.take_events();
++    slice_work |= !events.is_empty();
++    for event in events {
+       HANDLER.handle_nonuser_event(event);
+     }
+     HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::MainEventsCleared));
+-    for window_id in HANDLER.should_redraw() {
++    let redraw = HANDLER.should_redraw();
++    slice_work |= !redraw.is_empty();
++    for window_id in redraw {
+       HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawRequested(window_id)));
      }
      HANDLER.handle_nonuser_event(EventWrapper::StaticEvent(Event::RedrawEventsCleared));
      HANDLER.set_in_callback(false);
 -    if HANDLER.should_exit() {
-+    if HANDLER.should_exit() || matches!(HANDLER.run_timeout(), Some(RunTimeout::BeforeWait)) {
++    let should_exit = HANDLER.should_exit();
++    let slice_return = match HANDLER.run_timeout() {
++      Some(RunTimeout::BeforeWait) => true,
++      Some(RunTimeout::AfterWait(deadline)) => slice_work || Instant::now() >= deadline,
++      None => false,
++    };
++    if should_exit || slice_return {
++      if slice_return {
++        HANDLER.waker().stop();
++      }
        unsafe {
          let mtm = MainThreadMarker::new().unwrap();
          let app = NSApp(mtm);
-@@ -411,12 +453,25 @@ impl AppState {
+         let _pool = NSAutoreleasePool::new();
+         let () = msg_send![&app, stop: nil];
+-        // To stop event loop immediately, we need to post some event here.
++        // `stop:` only takes effect once AppKit processes another event.
+         post_dummy_event(&app);
        };
++      if slice_return {
++        return;
++      }
      }
      HANDLER.update_start_time();
 -    match HANDLER.get_old_and_new_control_flow() {
@@ -353,7 +450,7 @@ index 03dff91..fbb421d 100644
    }
  }
 diff --git a/src/platform_impl/macos/event_loop.rs b/src/platform_impl/macos/event_loop.rs
-index 8179ea9..589a1e9 100644
+index 8179ea9..aeb9c8e 100644
 --- a/src/platform_impl/macos/event_loop.rs
 +++ b/src/platform_impl/macos/event_loop.rs
 @@ -12,6 +12,7 @@ use std::{
@@ -386,11 +483,13 @@ index 8179ea9..589a1e9 100644
      // This transmute is always safe, in case it was reached through `run`, since our
      // lifetime will be already 'static. In other cases caller should ensure that all data
      // they passed to callback will actually outlive it, some apps just can't move
-@@ -232,12 +248,18 @@ impl<T> EventLoop<T> {
+@@ -232,12 +248,20 @@ impl<T> EventLoop<T> {
  
        AppState::set_callback(weak_cb, Rc::clone(&self.window_target));
        let () = msg_send![&app, run];
-+      AppState::set_run_timeout(None);
++      if timeout.is_some() {
++        AppState::clear_run_timeout();
++      }
  
        if let Some(panic) = self.panic_info.take() {
          drop(self._callback.take());
@@ -406,6 +505,21 @@ index 8179ea9..589a1e9 100644
      };
      drop(self._callback.take());
  
+diff --git a/src/platform_impl/windows/event_loop/runner.rs b/src/platform_impl/windows/event_loop/runner.rs
+index ff865de..15a9409 100644
+--- a/src/platform_impl/windows/event_loop/runner.rs
++++ b/src/platform_impl/windows/event_loop/runner.rs
+@@ -92,6 +92,10 @@ impl<T> EventLoopRunner<T> {
+     assert!(old_event_handler.is_none());
+   }
+ 
++  pub(crate) fn clear_event_handler(&self) {
++    self.event_handler.set(None);
++  }
++
+   pub(crate) fn reset_runner(&self) {
+     let EventLoopRunner {
+       thread_msg_target: _,
 diff --git a/src/platform_impl/windows/event_loop.rs b/src/platform_impl/windows/event_loop.rs
 index d580d0d..4e753e8 100644
 --- a/src/platform_impl/windows/event_loop.rs
@@ -497,18 +611,68 @@ index d580d0d..4e753e8 100644
      exit_code
    }
  
-diff --git a/src/platform_impl/windows/event_loop/runner.rs b/src/platform_impl/windows/event_loop/runner.rs
-index ff865de..15a9409 100644
---- a/src/platform_impl/windows/event_loop/runner.rs
-+++ b/src/platform_impl/windows/event_loop/runner.rs
-@@ -92,6 +92,10 @@ impl<T> EventLoopRunner<T> {
-     assert!(old_event_handler.is_none());
-   }
- 
-+  pub(crate) fn clear_event_handler(&self) {
-+    self.event_handler.set(None);
+diff --git a/examples/run_for_probe.rs b/examples/run_for_probe.rs
+new file mode 100644
+index 0000000..038c14c
+--- /dev/null
++++ b/examples/run_for_probe.rs
+@@ -0,0 +1,59 @@
++use std::{
++  thread,
++  time::{Duration, Instant},
++};
++use tao::{
++  event::Event,
++  event_loop::{ControlFlow, EventLoopBuilder},
++};
++
++fn run_for(event_loop: &mut tao::event_loop::EventLoop<()>, timeout: Duration) -> Duration {
++  let start = Instant::now();
++  event_loop.run_for(timeout, |_, _, control_flow| {
++    *control_flow = ControlFlow::Wait;
++  });
++  start.elapsed()
++}
++
++fn main() {
++  let mut event_loop = EventLoopBuilder::<()>::with_user_event().build();
++
++  let bootstrap = run_for(&mut event_loop, Duration::from_millis(50));
++  println!("bootstrap: {} ms", bootstrap.as_millis());
++
++  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
++  println!("warm-up: {} ms", elapsed.as_millis());
++  assert!(elapsed < Duration::from_millis(500));
++
++  for i in 1..=3 {
++    let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
++    println!("timeout {i}: {} ms", elapsed.as_millis());
++    assert!(elapsed >= Duration::from_millis(35));
++    assert!(elapsed < Duration::from_millis(500));
 +  }
 +
-   pub(crate) fn reset_runner(&self) {
-     let EventLoopRunner {
-       thread_msg_target: _,
++  let proxy = event_loop.create_proxy();
++  thread::spawn(move || {
++    thread::sleep(Duration::from_millis(25));
++    proxy.send_event(()).unwrap();
++  });
++
++  let start = Instant::now();
++  let mut received = false;
++  event_loop.run_for(Duration::from_millis(500), |event, _, control_flow| {
++    *control_flow = ControlFlow::Wait;
++    if matches!(event, Event::UserEvent(())) {
++      received = true;
++    }
++  });
++  let elapsed = start.elapsed();
++  println!("native wake: {} ms", elapsed.as_millis());
++  assert!(received);
++  assert!(elapsed >= Duration::from_millis(10));
++  assert!(elapsed < Duration::from_millis(300));
++
++  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
++  println!("post-wake timeout: {} ms", elapsed.as_millis());
++  assert!(elapsed >= Duration::from_millis(35));
++  assert!(elapsed < Duration::from_millis(500));
++}
