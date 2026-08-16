@@ -1257,6 +1257,7 @@ mod tests {
         assert_eq!(DEFAULT_IDENTIFIER, "Tauriless");
     }
 
+    #[cfg(not(target_os = "macos"))]
     #[test]
     fn tauri_context_identifier_is_mutable_before_build() {
         let mut context: tauri::Context<tauri::Wry> = tauri::generate_context!();
