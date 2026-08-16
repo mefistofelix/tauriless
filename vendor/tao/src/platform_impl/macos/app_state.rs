@@ -358,6 +358,7 @@ impl AppState {
       return;
     }
     if matches!(HANDLER.run_timeout(), Some(RunTimeout::AfterWait(_))) {
+      HANDLER.waker().stop();
       unsafe {
         let mtm = MainThreadMarker::new().unwrap();
         let app = NSApp(mtm);
