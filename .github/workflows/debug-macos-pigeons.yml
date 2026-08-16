@@ -1,6 +1,9 @@
 name: macOS Pigeons Debug
 
 on:
+  push:
+    branches:
+      - vendor-tauri-run-for
   workflow_dispatch:
     inputs:
       ssh_public_key:
