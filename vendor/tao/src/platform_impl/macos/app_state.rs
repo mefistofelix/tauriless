@@ -297,10 +297,14 @@ impl AppState {
       }
     });
     HANDLER.set_run_timeout(timeout);
-    HANDLER.take_slice_work();
-    if timeout.is_none() {
-      HANDLER.waker().stop();
+    if timeout.is_some() {
+      HANDLER.take_slice_work();
     }
+  }
+
+  pub fn clear_run_timeout() {
+    HANDLER.set_run_timeout(None);
+    HANDLER.waker().stop();
   }
 
   pub fn should_exit() -> bool {

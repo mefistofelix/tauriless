@@ -248,7 +248,9 @@ impl<T> EventLoop<T> {
 
       AppState::set_callback(weak_cb, Rc::clone(&self.window_target));
       let () = msg_send![&app, run];
-      AppState::set_run_timeout(None);
+      if timeout.is_some() {
+        AppState::clear_run_timeout();
+      }
 
       if let Some(panic) = self.panic_info.take() {
         drop(self._callback.take());
