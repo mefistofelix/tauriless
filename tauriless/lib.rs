@@ -14,6 +14,7 @@ use std::{
     ptr,
     sync::{Arc, Mutex},
     thread::{self, ThreadId},
+    time::Duration,
 };
 
 use serde::Deserialize;
@@ -68,8 +69,8 @@ pub enum Error {
     WrongThread,
     #[error("the runtime has already been shut down")]
     Shutdown,
-    #[error("drain is already running")]
-    ReentrantDrain,
+    #[error("run is already active")]
+    ReentrantRun,
     #[error("invalid JSON: {0}")]
     Json(#[from] serde_json::Error),
     #[error("invalid request: {0}")]
@@ -113,8 +114,8 @@ pub struct Tauriless {
     outbox: Outbox,
     asset_protocol: asset_protocol::AssetProtocol,
     event_subscriptions: event_subscriptions::SharedEventSubscriptions,
-    draining: bool,
-    drain_buffer: CString,
+    running: bool,
+    run_buffer: CString,
 }
 
 impl Tauriless {
@@ -134,13 +135,13 @@ impl Tauriless {
             outbox,
             asset_protocol,
             event_subscriptions,
-            draining: false,
-            drain_buffer: CString::default(),
+            running: false,
+            run_buffer: CString::default(),
         })
     }
 
     /// Executes one JSON request immediately on Tauri's owning thread.
-    /// Results are returned by the next `drain` call.
+    /// Results are returned by the next `run` call.
     pub fn send(&mut self, bytes: &[u8]) -> Result<()> {
         self.check_thread()?;
         self.check_running()?;
@@ -226,23 +227,22 @@ impl Tauriless {
         Ok(())
     }
 
-    /// Pumps exactly one non-blocking Tauri iteration and returns queued JSON.
-    pub fn drain(&mut self) -> Result<Vec<u8>> {
+    /// Runs Tauri's native event loop until work is drained or `timeout` expires.
+    pub fn run(&mut self, timeout: Duration) -> Result<Vec<u8>> {
         self.check_thread()?;
         self.check_running()?;
-        if self.draining {
-            return Err(Error::ReentrantDrain);
+        if self.running {
+            return Err(Error::ReentrantRun);
         }
-        self.draining = true;
+        self.running = true;
 
         if let Some(app) = self.app.as_mut() {
             let outbox = Arc::clone(&self.outbox);
-            #[allow(deprecated)]
-            app.run_iteration(move |_app, event| collect_event(&outbox, event));
+            app.run_for(timeout, move |_app, event| collect_event(&outbox, event));
         }
 
         let messages = std::mem::take(&mut *self.outbox.lock().expect("outbox mutex poisoned"));
-        self.draining = false;
+        self.running = false;
         Ok(serde_json::to_vec(&json!({ "messages": messages }))?)
     }
 
@@ -1032,17 +1032,17 @@ pub unsafe extern "C" fn tauriless_send(runtime: *mut Tauriless, json: *const c_
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tauriless_drain(runtime: *mut Tauriless) -> *const c_char {
+pub unsafe extern "C" fn tauriless_run(runtime: *mut Tauriless, timeout_ms: u32) -> *const c_char {
     ffi_pointer(|| {
         let runtime = runtime
             .as_mut()
             .ok_or((TAURILESS_INVALID_ARGUMENT, "runtime is null".into()))?;
         let bytes = runtime
-            .drain()
+            .run(Duration::from_millis(timeout_ms.into()))
             .map_err(|error| (TAURILESS_ERROR, error.to_string()))?;
-        runtime.drain_buffer = CString::new(bytes)
-            .map_err(|_| (TAURILESS_ERROR, "drain JSON contains a NUL byte".into()))?;
-        Ok(runtime.drain_buffer.as_ptr())
+        runtime.run_buffer = CString::new(bytes)
+            .map_err(|_| (TAURILESS_ERROR, "run JSON contains a NUL byte".into()))?;
+        Ok(runtime.run_buffer.as_ptr())
     })
 }
 
@@ -1243,11 +1243,11 @@ mod tests {
     }
 
     #[test]
-    fn bridge_can_drain_before_tauri_app_is_built() {
+    fn bridge_can_run_before_tauri_app_is_built() {
         let mut runtime = Tauriless::new().unwrap();
         assert!(runtime.app.is_none());
         assert_eq!(
-            serde_json::from_slice::<Value>(&runtime.drain().unwrap()).unwrap(),
+            serde_json::from_slice::<Value>(&runtime.run(Duration::ZERO).unwrap()).unwrap(),
             json!({ "messages": [] })
         );
     }

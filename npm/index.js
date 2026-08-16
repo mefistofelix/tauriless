@@ -58,8 +58,8 @@ if (deno) {
       parameters: ["pointer", "buffer"],
       result: "i32",
     },
-    tauriless_drain: {
-      parameters: ["pointer"],
+    tauriless_run: {
+      parameters: ["pointer", "u32"],
       result: "pointer",
     },
     tauriless_destroy: { parameters: ["pointer"], result: "i32" },
@@ -71,8 +71,8 @@ if (deno) {
     create: (out) => functions.tauriless_create(out),
     handle: (out) => Deno.UnsafePointer.create(out[0]),
     send: (runtime, bytes) => functions.tauriless_send(runtime, bytes),
-    drain: (runtime) => {
-      const pointer = functions.tauriless_drain(runtime);
+    run: (runtime, timeout) => {
+      const pointer = functions.tauriless_run(runtime, timeout);
       return pointer === null
         ? null
         : new Deno.UnsafePointerView(pointer).getCString();
@@ -93,7 +93,7 @@ if (deno) {
       args: ["ptr", "ptr"],
       returns: "i32",
     },
-    tauriless_drain: { args: ["ptr"], returns: "cstring" },
+    tauriless_run: { args: ["ptr", "u32"], returns: "cstring" },
     tauriless_destroy: { args: ["ptr"], returns: "i32" },
     tauriless_last_error: { args: [], returns: "cstring" },
   }).symbols;
@@ -105,8 +105,8 @@ if (deno) {
     handle: (out) => Number(out[0]),
     send: (runtime, bytes) =>
       functions.tauriless_send(runtime, bunFfi.ptr(bytes)),
-    drain: (runtime) => {
-      const value = functions.tauriless_drain(runtime);
+    run: (runtime, timeout) => {
+      const value = functions.tauriless_run(runtime, timeout);
       return value == null ? null : String(value);
     },
     destroy: (runtime) => functions.tauriless_destroy(runtime),
@@ -132,8 +132,8 @@ if (deno) {
       arguments: ["pointer", "pointer"],
       return: "i32",
     },
-    tauriless_drain: {
-      arguments: ["pointer"],
+    tauriless_run: {
+      arguments: ["pointer", "u32"],
       return: "pointer",
     },
     tauriless_destroy: { arguments: ["pointer"], return: "i32" },
@@ -148,7 +148,8 @@ if (deno) {
     handle: (out) => readPointer(out),
     send: (runtime, bytes) =>
       functions.tauriless_send(runtime, ffi.getRawPointer(bytes)),
-    drain: (runtime) => ffi.toString(functions.tauriless_drain(runtime)),
+    run: (runtime, timeout) =>
+      ffi.toString(functions.tauriless_run(runtime, timeout)),
     destroy: (runtime) => functions.tauriless_destroy(runtime),
     lastError: () => ffi.toString(functions.tauriless_last_error()) ?? "",
   };
@@ -170,7 +171,7 @@ export class Tauriless {
   constructor() {
     if (!isMainThread) {
       throw new Error(
-        "Tauriless must be created and drained on the main OS thread",
+        "Tauriless must be created and run on the main OS thread",
       );
     }
     const out = backend.words(1);
@@ -194,12 +195,15 @@ export class Tauriless {
     check(backend.send(this.#runtime, bytes), "tauriless_send");
   }
 
-  drain() {
+  run(timeout = 0) {
     this.#assertOpen();
+    if (!Number.isInteger(timeout) || timeout < 0 || timeout > 0xffffffff) {
+      throw new RangeError("timeout must be a uint32 number of milliseconds");
+    }
     // Each backend copies Rust's borrowed C string before returning here.
-    const json = backend.drain(this.#runtime);
+    const json = backend.run(this.#runtime, timeout);
     if (json === null) {
-      throw new Error(`tauriless_drain failed: ${lastError()}`);
+      throw new Error(`tauriless_run failed: ${lastError()}`);
     }
     return JSON.parse(json);
   }

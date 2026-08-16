@@ -15,9 +15,9 @@ experimental `node:ffi` module.
   this repository over patching or forking Tauri.
 - `tauriless_create` creates only the bridge state. Build `tauri::App` lazily on
   the first `plugin:webview|create_webview_window` request. Before that build,
-  `tauriless_drain` only flushes bridge-owned outbox messages; after the build it
-  performs exactly one non-blocking `App::run_iteration` per call. The host owns
-  the 16 ms timer.
+  `tauriless_run` only flushes bridge-owned outbox messages; after the build it
+  enters the normal native Tauri/Tao event loop for at most the caller-provided
+  timeout and returns earlier on a native wake. `timeout_ms == 0` never waits.
 - Create the bridge and lazily build/pump Tauri on the host's main OS thread.
   Every call on a given instance must happen on the thread that created it.
 - Keep the foreign interface to opaque instance pointers plus NUL-terminated
@@ -33,7 +33,7 @@ experimental `node:ffi` module.
   the create command's upstream `WindowConfig` and build it with Tauri's public
   `WebviewWindowBuilder`.
 - Override Tauri's compile-time `tauri` asset resolver through its public
-  asynchronous URI scheme hook. Forward requests to drain as `asset-request`
+  asynchronous URI scheme hook. Forward requests to the run outbox as `asset-request`
   messages and accept `tauriless:asset-response` through the existing send ABI.
   A response may contain a local `path` for Rust to read or UTF-8 `content`,
   with optional status, headers, and MIME. Bridge-owned controls are limited to
@@ -76,11 +76,11 @@ experimental `node:ffi` module.
   Consider only stable `WebviewWindow` instances, not child webviews. An omitted
   source label selects the sole webview window, then `main` if several exist; if
   several exist without `main`, require an explicit label.
-- Intercept every Tauri `Channel<T>` delivery into the drain outbox and consume
+- Intercept every Tauri `Channel<T>` delivery into the run outbox and consume
   it before JavaScript delivery. This experimental behavior intentionally also
   applies to channels created by code inside real webviews.
 - Forward the exact named Rust event-bus emissions from Tauri core and the
-  audited official plugins-workspace to the drain outbox. This includes the
+  audited official plugins-workspace to the run outbox. This includes the
   `tauriless://webview-message` application event emitted by webviews through
   Tauri's standard event plugin; do not replace it with a custom application
   command. Keep dynamic `Channel<T>` traffic in the global interceptor instead.
@@ -95,15 +95,17 @@ experimental `node:ffi` module.
   and uncompiled unless the user explicitly changes that set. Do not link the
   current dialog plugin into the Windows cdylib: its forced Common Controls v6
   import prevents loading from arbitrary hosts without an activation manifest.
-- Return asynchronous results and events from `tauriless_drain`; never call a
+- Return asynchronous results and events from `tauriless_run`; never call a
   foreign-language callback from Rust.
 - Do not add dependency scheduling or readiness queues. A host that creates a
   window, webview, tray, or resource must observe that request's result `id` in
-  `tauriless_drain` before issuing operations that depend on the new object.
+  `tauriless_run` before issuing operations that depend on the new object.
 - No background GUI thread. This would violate macOS main-thread requirements
   and would not solve JavaScript main-thread callback affinity.
 - All exported C functions must prevent Rust panics from crossing the ABI.
-- Use the pinned, unmodified crates.io Tauri release. Do not patch Tauri or WRY.
+- Pin Tauri 2.11.5 and Tao 0.35.3. Keep the complete upstream Tauri and Tao source
+  trees under `vendor/tauri` and `vendor/tao`, with the bounded `run_for` patch
+  applied directly there and tracked by Git. Do not fork or patch WRY.
 - Keep the default application icon based on the official `create-tauri-app`
   scaffold assets. `tauriless/icons/icon.png` must remain a real RGBA PNG (PNG
   color type 6), not indexed/grayscale; `build.rs` deliberately asserts this so
@@ -124,10 +126,10 @@ experimental `node:ffi` module.
   mobile plugin-listener events into the desktop bridge.
 - Keep the npm JavaScript adapter in one file and bind exactly the five C ABI
   functions through the built-in FFI of Node, Deno, or Bun. Its class may only
-  normalize create, JSON send, borrowed JSON drain, error copying, and
-  destruction. Do not add callbacks, resource wrappers, or a timer.
-- Follow the TDLib receive lifetime pattern: Rust owns the NUL-terminated drain
-  JSON and may replace it on the next drain or destroy. Every host must copy or
+  normalize create, JSON send, bounded run, borrowed JSON copying, error copying,
+  and destruction. Do not add callbacks, resource wrappers, or an internal timer.
+- Follow the TDLib receive lifetime pattern: Rust owns the NUL-terminated run
+  JSON and may replace it on the next run or destroy. Every host must copy or
   decode it synchronously before that point; no exported buffer-free function.
 - Build each release binary on its matching native GitHub-hosted runner and
   publish them in a GitHub Release. A separate release-triggered workflow

@@ -5,7 +5,7 @@ export interface TaurilessBatch {
 export declare class Tauriless {
   constructor();
   send(request: string | object): void;
-  drain(): TaurilessBatch;
+  run(timeoutMs?: number): TaurilessBatch;
   close(): void;
   [Symbol.dispose](): void;
 }

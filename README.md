@@ -1,8 +1,8 @@
 # Tauriless
 
 Tauriless embeds the native Tauri 2 runtime in a Rust library and exposes a
-small C ABI. The embedding process keeps ownership of its main thread and calls
-one non-blocking Tauri event-loop iteration approximately every 16 ms.
+small C ABI. The embedding process keeps ownership of its main thread and enters
+the native Tauri/Tao event loop for caller-bounded slices.
 
 This is a first C-ABI prototype. It deliberately has no N-API layer and no
 second callback or resource abstraction.
@@ -18,26 +18,27 @@ The exported surface is intentionally small:
 ```c
 tauriless_create(&runtime);
 tauriless_send(runtime, json);
-batch = tauriless_drain(runtime);
+batch = tauriless_run(runtime, timeout_ms);
 tauriless_destroy(runtime);
 ```
 
 `tauriless_create` initially creates only the Tauriless bridge state: no
 `tauri::App`, window, or webview exists yet. The first forwarded Tauri request
 must be `plugin:webview|create_webview_window`; at that point Tauriless lazily
-builds the unmodified Tauri app, then deserializes the upstream `WindowConfig`
+builds the pinned Tauri app, then deserializes the upstream `WindowConfig`
 and calls `WebviewWindowBuilder::from_config(...).build()`. Bridge-owned
 controls, including the Windows process AppUserModelID control, can run before
 that lazy build. Once a real webview exists, all forwarded requests reuse Tauri's
 own `Webview::on_message` dispatcher, ACL, plugin commands, resource table,
 invoke responses, and channels.
 
-Before the lazy app build, `tauriless_drain` simply returns bridge-owned outbox
+Before the lazy app build, `tauriless_run` simply returns bridge-owned outbox
 messages, so configuration requests can use the normal send/result protocol.
-After the app exists, every drain additionally performs exactly one
-`App::run_iteration`, collects completed IPC responses, Tauri events, and Tauri
-channel messages, and returns one UTF-8 JSON batch. It never invokes a foreign
-callback from Rust and it never starts a GUI thread.
+After the app exists, each run enters the normal native Tauri/Tao event loop,
+drains ready work, and may wait up to `timeout_ms` for the next native wake.
+`timeout_ms == 0` is non-blocking. A wake returns early after its work is drained.
+The call then returns one UTF-8 JSON batch. Tauriless never invokes a foreign
+callback from Rust and never starts a GUI thread.
 
 Every operation on an instance, including destruction, must happen on the OS
 thread that called `tauriless_create`; for GUI hosts this must be the main
@@ -67,7 +68,7 @@ to RGBA because Tauri's context generation requires an RGBA PNG; `build.rs`
 asserts PNG color type 6 to prevent the release Actions regression where an
 indexed/grayscale icon breaks the build.
 
-## Request and drain protocol
+## Request and run protocol
 
 A request uses upstream Tauri command names and payload shapes. For example:
 
@@ -88,7 +89,7 @@ A request uses upstream Tauri command names and payload shapes. For example:
 
 With no existing webview, the command above is the only forwarded Tauri request.
 Bridge-owned controls remain available. Its options are passed to Tauri's
-standard `WebviewWindowBuilder`, and its result is returned by a later drain.
+standard `WebviewWindowBuilder`, and its result is returned by a later run.
 
 ### Windows process AppUserModelID
 
@@ -122,7 +123,7 @@ alias for `appId`. `name` is optional; when omitted Tauriless uses the filename
 stem of the host JavaScript/TypeScript script from the process command line, or
 falls back to the current executable filename stem.
 
-Success is returned through `drain()` with the resolved paths:
+Success is returned through `run()` with the resolved paths:
 
 ```json
 {
@@ -178,7 +179,7 @@ await request("plugin:notification|notify", {
 
 The AppUserModelID command is bridge-owned and therefore works while
 `tauri::App` is still absent; its result is queued in the bridge outbox and can
-be received by `drain()`. App identity and WebView2 storage are deliberately
+be received by `run()`. App identity and WebView2 storage are deliberately
 independent. On Windows, if `dataDirectory` is omitted, every webview-window uses
 `%LOCALAPPDATA%\\Tauriless\\<sha256>`, where `<sha256>` is the SHA-256 of the
 exact absolute executable path returned by `GetModuleFileNameW`, encoded as
@@ -214,10 +215,10 @@ Tauriless registers Tauri's public asynchronous URI protocol hook under the
 standard `tauri` scheme. This replaces only the compile-time asset resolver: a
 page still has Tauri's normal local origin (`tauri://localhost` on macOS/Linux,
 `http://tauri.localhost` on Windows), standard IPC initialization, and ACL.
-No Tauri or WRY source is patched.
+The complete pinned Tauri and Tao source trees live under `vendor/`; the bounded `run_for` delta is applied there and tracked in `patches/`. WRY itself is not patched.
 
 When a webview requests `index.html`, CSS, JavaScript, an image, or another
-local asset, `drain()` returns:
+local asset, `run()` returns:
 
 ```json
 {
@@ -261,7 +262,7 @@ is an explicit `Content-Type` header, then `mime`, then the local path extension
 then the requested URL extension, and finally `application/octet-stream`.
 `content` takes precedence when both `content` and `path` are present. Unknown
 paths can be answered with `status: 404` and a short `content` body. The response
-command receives its normal result through a later drain.
+command receives its normal result through a later run.
 
 Persistent callbacks use Tauri's normal `Channel<T>` payload. The bridge
 intercepts every already serialized channel delivery before it reaches
@@ -324,7 +325,7 @@ Subscribe and unsubscribe are idempotent. The list above is the initial set, not
 a protected set: any default can be unsubscribed and later subscribed again.
 Both commands immediately update existing targets and also determine which
 listeners future windows and webviews receive. Their normal `kind: "result"`
-acknowledgements are returned through `drain()`. An added event uses the same
+acknowledgements are returned through `run()`. An added event uses the same
 message shape and target metadata as a default event:
 
 ```json
@@ -339,7 +340,7 @@ message shape and target metadata as a default event:
 
 There is no special `source: "subscription"` marker. Names are exact and use
 Tauri's valid event-name character set; `*` is not a wildcard. Events already
-queued before unsubscribe remain available to the next drain.
+queued before unsubscribe remain available to the next run.
 
 The audit distinguishes transport coverage from plugin availability. The core
 plugins and notification, opener, OS, positioner, and store are
@@ -375,31 +376,35 @@ are intentionally excluded.
 There is no dependency scheduler or alternate plugin dispatcher in the bridge.
 
 For binary Tauri responses, `value` is represented as `{ "bytes": [...] }`.
-`tauriless_drain` returns a borrowed NUL-terminated UTF-8 JSON pointer, following
-the TDLib receive pattern. It remains valid until the next `tauriless_drain` or
+`tauriless_run` returns a borrowed NUL-terminated UTF-8 JSON pointer, following
+the TDLib receive pattern. It remains valid until the next `tauriless_run` or
 `tauriless_destroy` call. Hosts must copy or decode it before that point; the
 JavaScript adapter converts it to a JavaScript string and calls `JSON.parse()`
-synchronously, so Rust can safely replace the backing buffer on the next drain.
+synchronously, so Rust can safely replace the backing buffer on the next run.
 `tauriless_last_error` similarly borrows thread-local storage until the next ABI
 error on that thread.
 
-## Host timer
+## Event-loop slices
 
-The language adapter owns the timer and callback map. In JavaScript-like
-pseudocode:
+`tauriless_run(runtime, timeout_ms)` first drains work that is already ready. If
+`timeout_ms` is non-zero and the native loop would otherwise sleep, it waits in
+the platform event loop until a GUI wake or the deadline, whichever comes first,
+then drains that wake before returning. A zero timeout never waits.
+
+An asynchronous host can preserve the old timer-driven behavior by calling
+`run(0)` periodically:
 
 ```js
 const timer = setInterval(() => {
-  const { messages } = JSON.parse(native.tauriless_drain(runtime));
+  const { messages } = JSON.parse(native.tauriless_run(runtime, 0));
   for (const message of messages) dispatchByIdOrEvent(message);
 }, 16);
 ```
 
-The native call itself does not wait for the next GUI event. The 16 ms interval
-is a generic interoperability trade-off: bounded GUI latency in exchange for a
-small amount of periodic work while idle. This is the generic timer approach
-described in
-[Slint and the Node.js Event Loop](https://slint.dev/blog/slint-and-the-nodejs-event-loop).
+A host that deliberately wants the native GUI wait can instead call `run(16)`;
+the call may return earlier on GUI activity. Windows uses Tao's Win32 message
+loop plus `MsgWaitForMultipleObjectsEx`, macOS uses the normal AppKit run loop
+with a bounded wake deadline, and Linux uses the GTK/GLib main context timeout.
 
 ## Deno FFI end-to-end demo
 
@@ -434,7 +439,7 @@ single-file example for the precompiled package. It imports
 sends a startup toast through `plugin:notification|notify`. The same demo also
 demonstrates bidirectional messaging: webview JavaScript emits
 `tauriless://webview-message` through Tauri's standard event plugin and Deno
-receives it through `drain()`; Deno emits a targeted
+receives it through `run()`; Deno emits a targeted
 `tauriless://host-message` back to the webview. The latter is also used by the
 example's `setHtml()` helper to update a DOM subtree. Tauri exposes neither
 `Webview::eval` nor a native `set_html` as public IPC commands, so no custom
@@ -477,12 +482,12 @@ tauriless.send({
 });
 
 const timer = setInterval(() => {
-  for (const message of tauriless.drain().messages) console.log(message);
+  for (const message of tauriless.run(0).messages) console.log(message);
 }, 16);
 ```
 
 The class adds only UTF-8 JSON encoding and immediate copying/parsing of the
-borrowed drain string; it has no callbacks, resource layer, or internal timer.
+borrowed run string; it has no callbacks, resource layer, or internal timer.
 Run Node 26.1+ with `--experimental-ffi`, Deno with `--allow-ffi`, or Bun
 normally. Deno can resolve `npm:@mefistofelix/tauriless` directly from the public
 npm registry.
@@ -501,7 +506,7 @@ $ffi = FFI::cdef(<<<'C'
 typedef struct Tauriless Tauriless;
 int tauriless_create(Tauriless **out);
 int tauriless_send(Tauriless *runtime, const char *json);
-const char *tauriless_drain(Tauriless *runtime);
+const char *tauriless_run(Tauriless *runtime, unsigned int timeout_ms);
 int tauriless_destroy(Tauriless *runtime);
 const char *tauriless_last_error(void);
 C, $library);
@@ -531,8 +536,8 @@ checkStatus(
 
 try {
     while (true) {
-        $batch = $ffi->tauriless_drain($runtime);
-        if (FFI::isNull($batch)) checkStatus($ffi, 2, 'drain');
+        $batch = $ffi->tauriless_run($runtime, 0);
+        if (FFI::isNull($batch)) checkStatus($ffi, 2, 'run');
         $messages = json_decode(
             FFI::string($batch),
             true,
@@ -559,10 +564,10 @@ Replace only the final blocking `while`/`usleep` section with a coroutine whose
 $pump = Async\spawn(function () use ($ffi, $runtime): void {
     try {
         while (true) {
-            $batch = $ffi->tauriless_drain($runtime);
-            if (FFI::isNull($batch)) checkStatus($ffi, 2, 'drain');
+            $batch = $ffi->tauriless_run($runtime, 0);
+            if (FFI::isNull($batch)) checkStatus($ffi, 2, 'run');
 
-            // FFI::string copies Rust's borrowed pointer before the next drain.
+            // FFI::string copies Rust's borrowed pointer before the next run.
             $messages = json_decode(
                 FFI::string($batch),
                 true,
@@ -584,7 +589,7 @@ Async\await($pump);
 
 `delay()` suspends only this coroutine, so the TrueAsync event loop can continue
 servicing its other work between GUI iterations. Do not use
-`Async\spawn_thread`: creation, drain, send, and destruction of one Tauriless
+`Async\spawn_thread`: creation, run, send, and destruction of one Tauriless
 instance must remain on the same main OS thread.
 
 `.github/workflows/release-native.yml` builds each binary on its matching native
@@ -631,8 +636,8 @@ lib.tauriless_create.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
 lib.tauriless_create.restype = ctypes.c_int32
 lib.tauriless_send.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
 lib.tauriless_send.restype = ctypes.c_int32
-lib.tauriless_drain.argtypes = [ctypes.c_void_p]
-lib.tauriless_drain.restype = ctypes.c_void_p
+lib.tauriless_run.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+lib.tauriless_run.restype = ctypes.c_void_p
 lib.tauriless_destroy.argtypes = [ctypes.c_void_p]
 lib.tauriless_destroy.restype = ctypes.c_int32
 lib.tauriless_last_error.argtypes = []
@@ -709,7 +714,7 @@ def handle_message(message):
                 "mime": "text/html; charset=utf-8",
             })
 
-        # Do not await inside the drain handler: this result needs a later drain.
+        # Do not await inside the run handler: this result needs a later run.
         request("tauriless:asset-response", payload).add_done_callback(
             report_background
         )
@@ -717,11 +722,11 @@ def handle_message(message):
         print(json.dumps(message, ensure_ascii=False))
 
 
-def drain_once():
-    pointer = lib.tauriless_drain(handle)
+def run_once(timeout_ms=0):
+    pointer = lib.tauriless_run(handle, timeout_ms)
     if not pointer:
-        raise RuntimeError(f"drain failed: {last_error()}")
-    # Copy and decode Rust's borrowed string before the next drain.
+        raise RuntimeError(f"run failed: {last_error()}")
+    # Copy and decode Rust's borrowed string before the next run.
     batch = json.loads(ctypes.string_at(pointer).decode("utf-8"))
     for message in batch.get("messages", []):
         handle_message(message)
@@ -732,17 +737,17 @@ async def main():
     stopped = loop.create_future()
     timer = None
 
-    def drain_tick():
+    def run_tick():
         nonlocal timer
         try:
-            drain_once()                   # one non-blocking GUI iteration
+            run_once(0)                    # non-blocking native GUI slice
         except BaseException as error:
             if not stopped.done():
                 stopped.set_exception(error)
         else:
-            timer = loop.call_later(0.016, drain_tick)
+            timer = loop.call_later(0.016, run_tick)
 
-    timer = loop.call_soon(drain_tick)
+    timer = loop.call_soon(run_tick)
     try:
         await request(
             "plugin:webview|create_webview_window",
@@ -764,8 +769,8 @@ asyncio.run(main())
 ```
 
 `ctypes.string_at()` performs the required synchronous copy of the borrowed
-drain buffer. Do not call Tauriless through `asyncio.to_thread()` or an executor:
-creation, send, drain, and destruction of one runtime must all remain on the
+run buffer. Do not call Tauriless through `asyncio.to_thread()` or an executor:
+creation, send, run, and destruction of one runtime must all remain on the
 main OS thread. `loop.call_later()` schedules one 16 ms timer callback at a time,
 so the rest of the Python event loop continues to run between GUI iterations.
 

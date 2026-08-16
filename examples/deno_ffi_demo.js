@@ -14,8 +14,8 @@ const dylib = Deno.dlopen(
       parameters: ["pointer", "buffer"],
       result: "i32",
     },
-    tauriless_drain: {
-      parameters: ["pointer"],
+    tauriless_run: {
+      parameters: ["pointer", "u32"],
       result: "pointer",
     },
     tauriless_destroy: { parameters: ["pointer"], result: "i32" },
@@ -72,10 +72,10 @@ function request(cmd, payload = {}, webview) {
   });
 }
 
-function drain() {
+function run(timeout = 0) {
   if (closed) return;
-  const pointer = dylib.symbols.tauriless_drain(runtime);
-  if (pointer === null) throw new Error(`tauriless_drain: ${lastError()}`);
+  const pointer = dylib.symbols.tauriless_run(runtime, timeout);
+  if (pointer === null) throw new Error(`tauriless_run: ${lastError()}`);
   const text = new Deno.UnsafePointerView(pointer).getCString();
 
   const batch = JSON.parse(text);
@@ -277,9 +277,9 @@ async function createDemo() {
 
   timer = setInterval(() => {
     try {
-      drain();
+      run(16);
     } catch (error) {
-      console.error("[drain fatale]", error);
+      console.error("[run fatale]", error);
       shutdown(1);
     }
   }, 16);

@@ -48,7 +48,7 @@ function request(cmd, payload = {}, webview) {
 function drain() {
   if (closed) return;
 
-  for (const message of tauriless.drain().messages) {
+  for (const message of tauriless.run(0).messages) {
     console.log("[tauri]", JSON.stringify(message));
 
     if (message.kind === "asset-request") {

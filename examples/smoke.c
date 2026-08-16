@@ -23,8 +23,8 @@ int main(void) {
   status = tauriless_send(runtime, json);
   if (status != TAURILESS_OK) return report_error("create webview", status);
 
-  const char *batch = tauriless_drain(runtime);
-  if (!batch) return report_error("drain", TAURILESS_ERROR);
+  const char *batch = tauriless_run(runtime, 0);
+  if (!batch) return report_error("run", TAURILESS_ERROR);
   printf("%s\n", batch);
 
   status = tauriless_destroy(runtime);

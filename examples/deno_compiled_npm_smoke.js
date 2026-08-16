@@ -30,7 +30,7 @@ function request(cmd, payload = {}, webview) {
 
 function drain() {
   if (closed) return;
-  for (const message of runtime.drain().messages) {
+  for (const message of runtime.run(0).messages) {
     console.log(JSON.stringify(message));
     if (message.kind === "asset-request") {
       void handleAssetRequest(message).catch((error) =>

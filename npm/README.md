@@ -19,7 +19,7 @@ tauriless.send({
 });
 
 const timer = setInterval(() => {
-  for (const message of tauriless.drain().messages) console.log(message);
+  for (const message of tauriless.run(16).messages) console.log(message);
 }, 16);
 
 // Later:
@@ -37,9 +37,10 @@ notifications, and a tray menu without a web server or separate HTML file.
 - Deno: run with `--allow-ffi`.
 - Bun: no additional flag is required.
 
-All calls for an instance must execute on the main OS thread. The application
-owns the approximately 16 ms timer that calls `drain()`; Tauriless never invokes
-a JavaScript callback.
+All calls for an instance must execute on the main OS thread. `run(timeoutMs)`
+processes ready GUI work and may wait natively up to the supplied timeout,
+returning earlier when the GUI loop wakes. Tauriless never invokes a JavaScript
+callback.
 
 On Windows, call `tauriless:set-app-user-model-id` before creating the first
 webview. Its optional `name` selects the direct Start Menu `<name>.lnk`; when
@@ -75,14 +76,15 @@ $ffi = FFI::cdef(<<<'C'
 typedef struct Tauriless Tauriless;
 int tauriless_create(Tauriless **);
 int tauriless_send(Tauriless *, const char *);
-const char *tauriless_drain(Tauriless *);
+const char *tauriless_run(Tauriless *, uint32_t timeout_ms);
 int tauriless_destroy(Tauriless *);
 const char *tauriless_last_error(void);
 C, $library);
 ```
 
-The repository README contains a complete PHP example with JSON send, a 16 ms
-drain loop, synchronous JSON decoding of the borrowed result, and destruction.
+The repository README contains a complete PHP example with JSON send, bounded
+native event-loop slices, synchronous JSON decoding of the borrowed result, and
+destruction.
 It also shows the TrueAsync variant: the same FFI setup runs in an
 `Async\spawn` coroutine and uses the event-loop-backed `Async\delay(16)` instead
 of blocking with `usleep`. Tauriless must stay on that main OS thread; do not use

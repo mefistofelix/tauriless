@@ -18,15 +18,16 @@ enum TaurilessStatus {
 /* Create and use the runtime on the host's main OS thread. */
 int32_t tauriless_create(Tauriless **out);
 
-/* Execute one NUL-terminated UTF-8 JSON request; queue its result for drain(). */
+/* Execute one NUL-terminated UTF-8 JSON request; queue its result for run(). */
 int32_t tauriless_send(Tauriless *runtime, const char *json);
 
 /*
- * Pump one non-blocking GUI iteration and borrow a NUL-terminated UTF-8 JSON
- * batch. The pointer remains valid until the next drain or destroy call. A
- * NULL result indicates an error available through tauriless_last_error().
+ * Run the native GUI event loop until it becomes idle after a wake, or until
+ * timeout_ms expires. timeout_ms == 0 never waits. The borrowed JSON pointer
+ * remains valid until the next run or destroy call. NULL indicates an error
+ * available through tauriless_last_error().
  */
-const char *tauriless_drain(Tauriless *runtime);
+const char *tauriless_run(Tauriless *runtime, uint32_t timeout_ms);
 
 int32_t tauriless_destroy(Tauriless *runtime);
 

@@ -30,6 +30,11 @@ windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Storage_E
 [build-dependencies]
 tauri-build = { version = "=2.6.3", features = [] }
 
+[patch.crates-io]
+tao = { path = "../vendor/tao" }
+tauri = { path = "../vendor/tauri/crates/tauri" }
+tauri-runtime-wry = { path = "../vendor/tauri/crates/tauri-runtime-wry" }
+
 [profile.release]
 opt-level = "z"
 lto = "fat"
