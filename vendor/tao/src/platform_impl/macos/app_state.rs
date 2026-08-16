@@ -445,7 +445,8 @@ impl AppState {
       return;
     }
     HANDLER.set_in_callback(true);
-    let mut slice_work = HANDLER.handle_user_events() || HANDLER.take_slice_work();
+    let mut slice_work = HANDLER.handle_user_events();
+    slice_work |= HANDLER.take_slice_work();
     let events = HANDLER.take_events();
     slice_work |= !events.is_empty();
     for event in events {
