@@ -46,6 +46,12 @@ jobs:
       - name: Check Tauriless
         run: cargo check --manifest-path tauriless/Cargo.toml --locked
 
+      - name: Build Tauriless dylib
+        run: cargo build --manifest-path tauriless/Cargo.toml --locked
+
+      - name: Smoke real Tauri webview with bounded run
+        run: deno run --allow-ffi examples/deno_macos_run_for_smoke.js
+
       - name: Test Tauriless
         run: cargo test --manifest-path tauriless/Cargo.toml --locked
 

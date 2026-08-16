@@ -15,12 +15,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.5
 
       - name: Probe repeated bounded native runs
         run: cargo run --manifest-path vendor/tao/Cargo.toml --example run_for_probe -q
 
       - name: Check Tauriless
         run: cargo check --manifest-path tauriless/Cargo.toml --locked
+
+      - name: Build Tauriless dylib
+        run: cargo build --manifest-path tauriless/Cargo.toml --locked
+
+      - name: Smoke real Tauri webview with bounded run
+        run: deno run --allow-ffi examples/deno_macos_run_for_smoke.js
 
       - name: Test Tauriless
         run: cargo test --manifest-path tauriless/Cargo.toml --locked

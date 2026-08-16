@@ -427,8 +427,9 @@ impl Tauriless {
 
         // Complete Tauri setup without creating a bootstrap window or webview.
         let setup_outbox = Arc::clone(&self.outbox);
-        #[allow(deprecated)]
-        app.run_iteration(move |_app, event| collect_event(&setup_outbox, event));
+        app.run_for(Duration::ZERO, move |_app, event| {
+            collect_event(&setup_outbox, event)
+        });
         self.app = Some(app);
         Ok(())
     }
