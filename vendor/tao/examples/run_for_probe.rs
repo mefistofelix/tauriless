@@ -2,7 +2,10 @@ use std::{
   thread,
   time::{Duration, Instant},
 };
-use tao::event_loop::{ControlFlow, EventLoopBuilder};
+use tao::{
+  event::Event,
+  event_loop::{ControlFlow, EventLoopBuilder},
+};
 
 fn run_for(event_loop: &mut tao::event_loop::EventLoop<()>, timeout: Duration) -> Duration {
   let start = Instant::now();
@@ -14,6 +17,13 @@ fn run_for(event_loop: &mut tao::event_loop::EventLoop<()>, timeout: Duration) -
 
 fn main() {
   let mut event_loop = EventLoopBuilder::<()>::with_user_event().build();
+
+  let bootstrap = run_for(&mut event_loop, Duration::from_millis(50));
+  println!("bootstrap: {} ms", bootstrap.as_millis());
+
+  let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
+  println!("warm-up: {} ms", elapsed.as_millis());
+  assert!(elapsed < Duration::from_millis(500));
 
   for i in 1..=3 {
     let elapsed = run_for(&mut event_loop, Duration::from_millis(50));
@@ -28,8 +38,17 @@ fn main() {
     proxy.send_event(()).unwrap();
   });
 
-  let elapsed = run_for(&mut event_loop, Duration::from_millis(500));
+  let start = Instant::now();
+  let mut received = false;
+  event_loop.run_for(Duration::from_millis(500), |event, _, control_flow| {
+    *control_flow = ControlFlow::Wait;
+    if matches!(event, Event::UserEvent(())) {
+      received = true;
+    }
+  });
+  let elapsed = start.elapsed();
   println!("native wake: {} ms", elapsed.as_millis());
+  assert!(received);
   assert!(elapsed >= Duration::from_millis(10));
   assert!(elapsed < Duration::from_millis(300));
 
