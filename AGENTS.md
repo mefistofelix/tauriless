@@ -37,9 +37,12 @@ experimental `node:ffi` module.
   messages and accept `tauriless:asset-response` through the existing send ABI.
   A response may contain a local `path` for Rust to read or UTF-8 `content`,
   with optional status, headers, and MIME. Bridge-owned controls are limited to
-  that asset response, Windows `tauriless:set-app-user-model-id`, webview-window
-  creation, and exact-name event subscribe/unsubscribe. The Windows AppUserModelID
-  control remains available only before the lazy Tauri app build. Its canonical
+  that asset response, cross-platform `tauriless:set-app-identifier`, Windows
+  `tauriless:set-app-user-model-id`, webview-window creation, and exact-name event
+  subscribe/unsubscribe. Both identity controls remain available only before the
+  lazy Tauri app build. The generic identifier payload is exactly
+  `{ "identifier": "..." }`; it configures Tauri's application identifier without
+  performing platform registration. Its canonical
   payload is `{ "appId": "...", "name": "..." }` (`appID` remains an accepted
   alias and `name` is optional). It must
   obtain the current process executable with `GetModuleFileNameW`, create or
@@ -54,9 +57,10 @@ experimental `node:ffi` module.
   must be structured with clear `operation` and `message` fields and include
   `shortcutPath` whenever it has been resolved. Persist the successful value in
   bridge state and copy it into `generate_context!().config_mut().identifier`
-  immediately before `Builder::build`; if the command is never sent, set the
-  Tauri identifier to exactly `Tauriless`. Reject attempts to change it after
-  the app is built. Shortcut creation and the explicit process AppUserModelID
+  immediately before `Builder::build`, unless the generic application identifier
+  was explicitly set, which takes precedence. If neither identity command is
+  sent, set the Tauri identifier to exactly `Tauriless`. Reject attempts to
+  change either identity after the app is built. Shortcut creation and the explicit process AppUserModelID
   must both complete before Tauri and WebView initialization.
 - On Windows, every `plugin:webview|create_webview_window` request must explicitly
   set the builder data directory. If upstream `WindowConfig.dataDirectory` is
@@ -103,6 +107,9 @@ experimental `node:ffi` module.
 - No background GUI thread. This would violate macOS main-thread requirements
   and would not solve JavaScript main-thread callback affinity.
 - All exported C functions must prevent Rust panics from crossing the ABI.
+- Build Tauri with `custom-protocol` enabled. Tauriless has no dev-server mode,
+  so release/runtime plugin behavior (notably macOS notification application
+  identity) must never be misclassified by Tauri as development mode.
 - Pin Tauri 2.11.5 and Tao 0.35.3. Keep the complete upstream Tauri and Tao source
   trees under `vendor/tauri` and `vendor/tao`, with the bounded `run_for` patch
   applied directly there and tracked by Git. Do not fork or patch WRY.

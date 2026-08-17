@@ -91,6 +91,29 @@ With no existing webview, the command above is the only forwarded Tauri request.
 Bridge-owned controls remain available. Its options are passed to Tauri's
 standard `WebviewWindowBuilder`, and its result is returned by a later run.
 
+### Application identifier
+
+Before creating the first webview, any host can set Tauri's application
+identifier through the existing `send()` ABI:
+
+```json
+{
+  "id": 1,
+  "cmd": "tauriless:set-app-identifier",
+  "payload": { "identifier": "com.example.myapp" }
+}
+```
+
+This value is copied to `generate_context!().config_mut().identifier` before
+`Builder::build`. It is intentionally only application identity; it performs no
+OS registration. This is especially important on macOS, where Tauri's desktop
+notification backend associates notifications with the configured application
+identifier. Tauriless builds Tauri with `custom-protocol`, so the packaged
+runtime uses Tauri's production behavior instead of development/Terminal
+notification identity. The command is rejected after the lazy app build. If it
+is omitted, the Windows AppUserModelID below can supply the Tauri identifier;
+otherwise the fallback remains exactly `Tauriless`.
+
 ### Windows process AppUserModelID
 
 On Windows, the host can set the current process explicit AppUserModelID through
@@ -146,10 +169,11 @@ known, for example:
 }
 ```
 
-If no AppUserModelID command is sent, Tauri's identifier is exactly
-`Tauriless`. Once the Tauri app has been built, changing the AppUserModelID is
-rejected. On non-Windows platforms the command returns a structured
-unsupported-platform result.
+If neither identity command is sent, Tauri's identifier is exactly `Tauriless`.
+An explicit `tauriless:set-app-identifier` takes precedence over the Windows
+AppUserModelID for Tauri configuration. Once the Tauri app has been built,
+changing either identity is rejected. On non-Windows platforms the Windows
+AppUserModelID command returns a structured unsupported-platform result.
 
 A Deno host should set it before the first webview and can then use the ordinary
 Tauri notification plugin once a webview exists:

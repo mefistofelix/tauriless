@@ -59,6 +59,7 @@ const FORWARDED_EVENT_NAMES: &[&str] = &[
 ];
 const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
 const SET_APP_USER_MODEL_ID_COMMAND: &str = "tauriless:set-app-user-model-id";
+const SET_APP_IDENTIFIER_COMMAND: &str = "tauriless:set-app-identifier";
 const DEFAULT_IDENTIFIER: &str = "Tauriless";
 
 pub(crate) type Outbox = Arc<Mutex<Vec<Value>>>;
@@ -105,10 +106,16 @@ struct SetAppUserModelIdPayload {
     name: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct SetAppIdentifierPayload {
+    identifier: String,
+}
+
 /// The single opaque object held by foreign-language hosts.
 pub struct Tauriless {
     app: Option<tauri::App>,
     app_user_model_id: Option<String>,
+    app_identifier: Option<String>,
     closed: bool,
     owner: ThreadId,
     outbox: Outbox,
@@ -130,6 +137,7 @@ impl Tauriless {
         Ok(Self {
             app: None,
             app_user_model_id: None,
+            app_identifier: None,
             closed: false,
             owner: thread::current().id(),
             outbox,
@@ -147,6 +155,22 @@ impl Tauriless {
         self.check_running()?;
         let request: Request = serde_json::from_slice(bytes)?;
         validate(&request)?;
+
+        if request.cmd == SET_APP_IDENTIFIER_COMMAND {
+            let outcome = if self.app.is_some() {
+                Err(json!({
+                  "operation": "set-app-identifier",
+                  "message": "application identifier must be set before the Tauri app is initialized"
+                }))
+            } else {
+                set_app_identifier(request.payload).map(|identifier| {
+                    self.app_identifier = Some(identifier.clone());
+                    json!({ "identifier": identifier })
+                })
+            };
+            result(&self.outbox, request.id, outcome);
+            return Ok(());
+        }
 
         if request.cmd == SET_APP_USER_MODEL_ID_COMMAND {
             let outcome = if self.app.is_some() {
@@ -402,8 +426,9 @@ impl Tauriless {
             .plugin(tauri_plugin_store::Builder::default().build());
         let mut context = tauri::generate_context!();
         context.config_mut().identifier = self
-            .app_user_model_id
+            .app_identifier
             .clone()
+            .or_else(|| self.app_user_model_id.clone())
             .unwrap_or_else(|| DEFAULT_IDENTIFIER.into());
         let mut app = self
             .asset_protocol
@@ -470,6 +495,23 @@ fn resolved_explicit_webview_data_directory(
         }));
     }
     Ok(path)
+}
+
+fn set_app_identifier(payload: Value) -> std::result::Result<String, Value> {
+    let payload: SetAppIdentifierPayload = serde_json::from_value(payload).map_err(|error| {
+        json!({
+          "operation": "parse-app-identifier",
+          "message": error.to_string()
+        })
+    })?;
+    let identifier = payload.identifier.trim();
+    if identifier.is_empty() || identifier.contains('\0') {
+        return Err(json!({
+          "operation": "validate-app-identifier",
+          "message": "identifier must be a non-empty string without NUL characters"
+        }));
+    }
+    Ok(identifier.to_owned())
 }
 
 #[cfg(windows)]
@@ -1170,6 +1212,16 @@ mod tests {
         assert_eq!(first.parent().unwrap(), local_data.join(DEFAULT_IDENTIFIER));
         assert_ne!(first, moved);
         assert_eq!(first.file_name().unwrap().to_string_lossy().len(), 64);
+    }
+
+    #[test]
+    fn app_identifier_is_validated() {
+        assert_eq!(
+            set_app_identifier(json!({ "identifier": " com.example.app " })).unwrap(),
+            "com.example.app"
+        );
+        assert!(set_app_identifier(json!({ "identifier": "" })).is_err());
+        assert!(set_app_identifier(json!({ "identifier": "bad\0id" })).is_err());
     }
 
     #[test]
