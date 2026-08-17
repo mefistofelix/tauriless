@@ -384,14 +384,12 @@ async function createDemo() {
     }
   }, 16);
 
-  if (Deno.build.os === "windows") {
-    console.error(`[fase] AppUserModelID: ${APP_USER_MODEL_ID}`);
-    const registration = await request("tauriless:set-app-user-model-id", {
-      appId: APP_USER_MODEL_ID,
-      name: "Tauriless Deno Demo",
-    });
-    console.error(`[path lnk] ${registration.shortcutPath}`);
-  }
+  console.error(`[fase] application identity: ${APP_USER_MODEL_ID}`);
+  const registration = await request("tauriless:set-app-user-model-id", {
+    appId: APP_USER_MODEL_ID,
+    name: "Tauriless Deno Demo",
+  });
+  if (registration.shortcutPath) console.error(`[path lnk] ${registration.shortcutPath}`);
 
   console.error("[fase] creazione webview…");
   const created = await request("plugin:webview|create_webview_window", {

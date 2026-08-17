@@ -37,31 +37,26 @@ experimental `node:ffi` module.
   messages and accept `tauriless:asset-response` through the existing send ABI.
   A response may contain a local `path` for Rust to read or UTF-8 `content`,
   with optional status, headers, and MIME. Bridge-owned controls are limited to
-  that asset response, cross-platform `tauriless:set-app-identifier`, Windows
-  `tauriless:set-app-user-model-id`, webview-window creation, and exact-name event
-  subscribe/unsubscribe. Both identity controls remain available only before the
-  lazy Tauri app build. The generic identifier payload is exactly
-  `{ "identifier": "..." }`; it configures Tauri's application identifier without
-  performing platform registration. Its canonical
+  that asset response, cross-platform `tauriless:set-app-user-model-id`,
+  webview-window creation, and exact-name event subscribe/unsubscribe. Application
+  identity remains configurable only before the lazy Tauri app build. Its canonical
   payload is `{ "appId": "...", "name": "..." }` (`appID` remains an accepted
-  alias and `name` is optional). It must
-  obtain the current process executable with `GetModuleFileNameW`, create or
-  update the shortcut directly as `FOLDERID_Programs/<name>.lnk`, without a
-  `Tauriless` subdirectory. If `name` is omitted, infer the script filename
-  stem from the process command line and fall back to the executable filename
-  stem. `IShellLinkW::SetPath` must always be refreshed to the absolute current
-  executable, and `PKEY_AppUserModel_ID` must be refreshed through
-  `IPropertyStore` before saving with `IPersistFile`. Then call
-  `SetCurrentProcessExplicitAppUserModelID`. Do not spawn PowerShell or any
-  helper process. The successful result must include `shortcutPath`; failures
-  must be structured with clear `operation` and `message` fields and include
-  `shortcutPath` whenever it has been resolved. Persist the successful value in
-  bridge state and copy it into `generate_context!().config_mut().identifier`
-  immediately before `Builder::build`, unless the generic application identifier
-  was explicitly set, which takes precedence. If neither identity command is
-  sent, set the Tauri identifier to exactly `Tauriless`. Reject attempts to
-  change either identity after the app is built. Shortcut creation and the explicit process AppUserModelID
-  must both complete before Tauri and WebView initialization.
+  alias and `name` is optional). On every desktop platform, `appId` is persisted in
+  bridge state and copied to `generate_context!().config_mut().identifier`
+  immediately before `Builder::build`; if the command is omitted, the Tauri
+  identifier is exactly `Tauriless`. On Windows only, the same command additionally
+  obtains the current process executable with `GetModuleFileNameW`, creates or
+  updates the shortcut directly as `FOLDERID_Programs/<name>.lnk` without a
+  `Tauriless` subdirectory, refreshes `IShellLinkW::SetPath` and
+  `PKEY_AppUserModel_ID`, saves through `IPersistFile`, and calls
+  `SetCurrentProcessExplicitAppUserModelID`. If `name` is omitted on Windows,
+  infer the script filename stem from the process command line and fall back to the
+  executable filename stem. Do not spawn PowerShell or any helper process. Windows
+  success must include `shortcutPath`; failures must be structured with clear
+  `operation` and `message` fields and include `shortcutPath` whenever resolved.
+  Reject identity changes after the app is built. Windows shortcut creation and
+  explicit process AppUserModelID registration must complete before Tauri/WebView
+  initialization; macOS and Linux perform no Windows registration extras.
 - On Windows, every `plugin:webview|create_webview_window` request must explicitly
   set the builder data directory. If upstream `WindowConfig.dataDirectory` is
   present, preserve the Tauri 2.11.5 relative LocalData resolution and reject

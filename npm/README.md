@@ -42,13 +42,14 @@ processes ready GUI work and may wait natively up to the supplied timeout,
 returning earlier when the GUI loop wakes. Tauriless never invokes a JavaScript
 callback.
 
-On any platform, `tauriless:set-app-identifier` may be called before the first
-webview with `{ identifier: "com.example.app" }` to set Tauri's application
-identity. Tauriless builds Tauri in production/custom-protocol mode so macOS
-notifications use that application identity rather than development Terminal
-identity. On Windows, `tauriless:set-app-user-model-id` additionally performs the
-native process/Start Menu registration; its optional `name` selects the direct
-Start Menu `<name>.lnk`. The result exposes `shortcutPath`, and
+On every desktop platform, `tauriless:set-app-user-model-id` may be called before
+the first webview with `{ appId: "com.example.app", name?: "Example App" }`.
+`appId` becomes Tauri's application identifier before `Builder::build`. Tauriless
+builds Tauri in production/custom-protocol mode so packaged macOS notifications
+use that application identity rather than development Terminal identity. Windows
+uses the same command and additionally performs the native process/Start Menu
+AppUserModelID registration; its optional `name` selects the direct Start Menu
+`<name>.lnk`. The Windows result exposes `shortcutPath`, and
 `plugin:webview|create_webview_window` exposes `webviewDataDirectory`. Failures
 are structured objects with `operation`, `message`, and the applicable resolved
 path.

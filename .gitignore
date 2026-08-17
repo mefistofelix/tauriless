@@ -1,6 +1,7 @@
 /msvc/
 /msvc.lock
 /.deno/
+/.mrmcp/
 /deno.exe
 /msvcup.exe
 /rustup-init.exe

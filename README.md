@@ -91,33 +91,10 @@ With no existing webview, the command above is the only forwarded Tauri request.
 Bridge-owned controls remain available. Its options are passed to Tauri's
 standard `WebviewWindowBuilder`, and its result is returned by a later run.
 
-### Application identifier
+### Application identity
 
-Before creating the first webview, any host can set Tauri's application
-identifier through the existing `send()` ABI:
-
-```json
-{
-  "id": 1,
-  "cmd": "tauriless:set-app-identifier",
-  "payload": { "identifier": "com.example.myapp" }
-}
-```
-
-This value is copied to `generate_context!().config_mut().identifier` before
-`Builder::build`. It is intentionally only application identity; it performs no
-OS registration. This is especially important on macOS, where Tauri's desktop
-notification backend associates notifications with the configured application
-identifier. Tauriless builds Tauri with `custom-protocol`, so the packaged
-runtime uses Tauri's production behavior instead of development/Terminal
-notification identity. The command is rejected after the lazy app build. If it
-is omitted, the Windows AppUserModelID below can supply the Tauri identifier;
-otherwise the fallback remains exactly `Tauriless`.
-
-### Windows process AppUserModelID
-
-On Windows, the host can set the current process explicit AppUserModelID through
-the existing `send()` ABI before the lazy Tauri app build:
+Before creating the first webview, every desktop host uses the same bridge-owned
+identity command:
 
 ```json
 {
@@ -130,7 +107,23 @@ the existing `send()` ABI before the lazy Tauri app build:
 }
 ```
 
-The bridge obtains the current executable with `GetModuleFileNameW(NULL, ...)`,
+`appId` is cross-platform: Tauriless persists it before the lazy app build and
+copies it to `generate_context!().config_mut().identifier` immediately before
+`Builder::build`, so Tauri itself and `plugin:app|identifier` see the requested
+identifier on Windows, macOS, and Linux. `appID` remains an accepted alias.
+`name` is optional and is only operationally significant for the Windows
+registration described below. The command is rejected after the lazy app build;
+if it is omitted, the Tauri identifier remains exactly `Tauriless`.
+
+Tauriless builds Tauri with `custom-protocol`, which is Tauri's production-mode
+feature. This matters for packaged macOS applications because the notification
+backend must use the configured application identity rather than development
+Terminal identity.
+
+### Windows process AppUserModelID extras
+
+On Windows only, the same identity command also performs the native registration
+extras needed by this embedding scenario. The bridge obtains the current executable with `GetModuleFileNameW(NULL, ...)`,
 creates or updates `FOLDERID_Programs\My App.lnk` directly, without an
 intermediate `Tauriless` directory, and always refreshes its `IShellLinkW`
 target to that absolute executable. It writes `PKEY_AppUserModel_ID` through
@@ -138,13 +131,9 @@ target to that absolute executable. It writes `PKEY_AppUserModel_ID` through
 existing shortcut with that name is updated. It then calls
 `SetCurrentProcessExplicitAppUserModelID(appId)` directly. All of this completes
 before Tauri or WebView is initialized. No PowerShell, helper executable, or
-spawned process is involved. Immediately before
-`Builder::build`, Tauriless assigns the same value to
-`generate_context!().config_mut().identifier`, so Tauri itself and
-`plugin:app|identifier` see the requested identifier. `appID` is accepted as an
-alias for `appId`. `name` is optional; when omitted Tauriless uses the filename
-stem of the host JavaScript/TypeScript script from the process command line, or
-falls back to the current executable filename stem.
+spawned process is involved. `name` is optional; when omitted Tauriless uses the filename stem of the host
+JavaScript/TypeScript script from the process command line, or falls back to the
+current executable filename stem.
 
 Success is returned through `run()` with the resolved paths:
 
@@ -169,11 +158,10 @@ known, for example:
 }
 ```
 
-If neither identity command is sent, Tauri's identifier is exactly `Tauriless`.
-An explicit `tauriless:set-app-identifier` takes precedence over the Windows
-AppUserModelID for Tauri configuration. Once the Tauri app has been built,
-changing either identity is rejected. On non-Windows platforms the Windows
-AppUserModelID command returns a structured unsupported-platform result.
+If the identity command is not sent, Tauri's identifier is exactly `Tauriless`.
+Once the Tauri app has been built, changing the identity is rejected. On macOS
+and Linux the command stops after configuring the Tauri identifier; only Windows
+performs shortcut and explicit process AppUserModelID registration.
 
 A Deno host should set it before the first webview and can then use the ordinary
 Tauri notification plugin once a webview exists:
@@ -183,7 +171,7 @@ const registration = await request("tauriless:set-app-user-model-id", {
   appId: "com.example.myapp",
   name: "My App",
 });
-console.log(registration.shortcutPath);
+if (registration.shortcutPath) console.log(registration.shortcutPath);
 
 const created = await request("plugin:webview|create_webview_window", {
   options: {
@@ -201,9 +189,9 @@ await request("plugin:notification|notify", {
 });
 ```
 
-The AppUserModelID command is bridge-owned and therefore works while
-`tauri::App` is still absent; its result is queued in the bridge outbox and can
-be received by `run()`. App identity and WebView2 storage are deliberately
+The identity command is bridge-owned and therefore works while `tauri::App` is
+still absent; its result is queued in the bridge outbox and can be received by
+`run()`. App identity and WebView2 storage are deliberately
 independent. On Windows, if `dataDirectory` is omitted, every webview-window uses
 `%LOCALAPPDATA%\\Tauriless\\<sha256>`, where `<sha256>` is the SHA-256 of the
 exact absolute executable path returned by `GetModuleFileNameW`, encoded as

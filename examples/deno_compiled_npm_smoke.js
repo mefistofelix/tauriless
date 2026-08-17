@@ -168,7 +168,7 @@ async function main() {
       appId: APP_ID,
       name: APP_NAME,
     });
-    console.log("shortcutPath:", registration.shortcutPath);
+    if (registration.shortcutPath) console.log("shortcutPath:", registration.shortcutPath);
   } catch (error) {
     registrationError = error;
     console.error("set-app-user-model-id:", JSON.stringify(error));

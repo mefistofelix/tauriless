@@ -59,7 +59,6 @@ const FORWARDED_EVENT_NAMES: &[&str] = &[
 ];
 const CREATE_WEBVIEW_WINDOW_COMMAND: &str = "plugin:webview|create_webview_window";
 const SET_APP_USER_MODEL_ID_COMMAND: &str = "tauriless:set-app-user-model-id";
-const SET_APP_IDENTIFIER_COMMAND: &str = "tauriless:set-app-identifier";
 const DEFAULT_IDENTIFIER: &str = "Tauriless";
 
 pub(crate) type Outbox = Arc<Mutex<Vec<Value>>>;
@@ -99,22 +98,16 @@ struct CreateWebviewWindowPayload {
 }
 
 #[derive(Debug, Deserialize)]
-struct SetAppUserModelIdPayload {
+struct SetAppIdentityPayload {
     #[serde(rename = "appId", alias = "appID")]
     app_id: String,
     #[serde(default)]
     name: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct SetAppIdentifierPayload {
-    identifier: String,
-}
-
 /// The single opaque object held by foreign-language hosts.
 pub struct Tauriless {
     app: Option<tauri::App>,
-    app_user_model_id: Option<String>,
     app_identifier: Option<String>,
     closed: bool,
     owner: ThreadId,
@@ -136,7 +129,6 @@ impl Tauriless {
 
         Ok(Self {
             app: None,
-            app_user_model_id: None,
             app_identifier: None,
             closed: false,
             owner: thread::current().id(),
@@ -156,35 +148,18 @@ impl Tauriless {
         let request: Request = serde_json::from_slice(bytes)?;
         validate(&request)?;
 
-        if request.cmd == SET_APP_IDENTIFIER_COMMAND {
-            let outcome = if self.app.is_some() {
-                Err(json!({
-                  "operation": "set-app-identifier",
-                  "message": "application identifier must be set before the Tauri app is initialized"
-                }))
-            } else {
-                set_app_identifier(request.payload).map(|identifier| {
-                    self.app_identifier = Some(identifier.clone());
-                    json!({ "identifier": identifier })
-                })
-            };
-            result(&self.outbox, request.id, outcome);
-            return Ok(());
-        }
-
         if request.cmd == SET_APP_USER_MODEL_ID_COMMAND {
             let outcome = if self.app.is_some() {
                 Err(json!({
                   "operation": "set-app-user-model-id",
-                  "message": "AppUserModelID must be set before the Tauri app is initialized"
+                  "message": "application identity must be set before the Tauri app is initialized"
                 }))
             } else {
-                set_current_process_app_user_model_id(request.payload).map(|(app_id, value)| {
-                    self.app_user_model_id = Some(app_id);
+                set_app_identity(request.payload).map(|(app_id, value)| {
+                    self.app_identifier = Some(app_id);
                     value
                 })
-            }
-            .map_err(|error| error);
+            };
             result(&self.outbox, request.id, outcome);
             return Ok(());
         }
@@ -428,7 +403,6 @@ impl Tauriless {
         context.config_mut().identifier = self
             .app_identifier
             .clone()
-            .or_else(|| self.app_user_model_id.clone())
             .unwrap_or_else(|| DEFAULT_IDENTIFIER.into());
         let mut app = self
             .asset_protocol
@@ -497,54 +471,43 @@ fn resolved_explicit_webview_data_directory(
     Ok(path)
 }
 
-fn set_app_identifier(payload: Value) -> std::result::Result<String, Value> {
-    let payload: SetAppIdentifierPayload = serde_json::from_value(payload).map_err(|error| {
+fn set_app_identity(payload: Value) -> std::result::Result<(String, Value), Value> {
+    let payload: SetAppIdentityPayload = serde_json::from_value(payload).map_err(|error| {
         json!({
-          "operation": "parse-app-identifier",
+          "operation": "parse-app-identity",
           "message": error.to_string()
         })
     })?;
-    let identifier = payload.identifier.trim();
-    if identifier.is_empty() || identifier.contains('\0') {
+    let app_id = payload.app_id.trim();
+    if app_id.is_empty() || app_id.contains('\0') {
         return Err(json!({
-          "operation": "validate-app-identifier",
-          "message": "identifier must be a non-empty string without NUL characters"
+          "operation": "validate-app-identity",
+          "message": "appId must be a non-empty string without NUL characters"
         }));
     }
-    Ok(identifier.to_owned())
+    set_platform_app_identity(app_id.to_owned(), payload.name)
 }
 
 #[cfg(windows)]
-fn set_current_process_app_user_model_id(
-    payload: Value,
+fn set_platform_app_identity(
+    app_id: String,
+    requested_name: Option<String>,
 ) -> std::result::Result<(String, Value), Value> {
-    let payload: SetAppUserModelIdPayload = serde_json::from_value(payload).map_err(|error| {
-        json!({
-          "operation": "parse-app-user-model-id",
-          "message": error.to_string()
-        })
-    })?;
-    if payload.app_id.contains('\0') {
-        return Err(json!({
-          "operation": "validate-app-user-model-id",
-          "message": "appId must not contain a NUL character"
-        }));
-    }
     let executable = current_executable_path().map_err(|message| {
         json!({
           "operation": "resolve-executable",
           "message": message
         })
     })?;
-    let name = application_name(payload.name.as_deref(), &executable).map_err(|message| {
+    let name = application_name(requested_name.as_deref(), &executable).map_err(|message| {
         json!({
           "operation": "resolve-shortcut-name",
           "message": message,
           "executablePath": path_string(&executable)
         })
     })?;
-    let shortcut = install_start_menu_shortcut(&payload.app_id, &name, &executable)?;
-    set_current_process_explicit_app_user_model_id(&payload.app_id).map_err(|message| {
+    let shortcut = install_start_menu_shortcut(&app_id, &name, &executable)?;
+    set_current_process_explicit_app_user_model_id(&app_id).map_err(|message| {
         registration_error(
             "set-current-process-app-user-model-id",
             message,
@@ -553,22 +516,24 @@ fn set_current_process_app_user_model_id(
         )
     })?;
     let value = json!({
-      "appId": payload.app_id,
+      "appId": app_id.clone(),
       "name": name,
       "executablePath": path_string(&executable),
       "shortcutPath": path_string(&shortcut)
     });
-    Ok((payload.app_id, value))
+    Ok((app_id, value))
 }
 
 #[cfg(not(windows))]
-fn set_current_process_app_user_model_id(
-    _payload: Value,
+fn set_platform_app_identity(
+    app_id: String,
+    requested_name: Option<String>,
 ) -> std::result::Result<(String, Value), Value> {
-    Err(json!({
-      "operation": "set-app-user-model-id",
-      "message": "AppUserModelID is only available on Windows"
-    }))
+    let value = match requested_name {
+        Some(name) => json!({ "appId": app_id.clone(), "name": name }),
+        None => json!({ "appId": app_id.clone() }),
+    };
+    Ok((app_id, value))
 }
 
 #[cfg(windows)]
@@ -1215,20 +1180,18 @@ mod tests {
     }
 
     #[test]
-    fn app_identifier_is_validated() {
-        assert_eq!(
-            set_app_identifier(json!({ "identifier": " com.example.app " })).unwrap(),
-            "com.example.app"
-        );
-        assert!(set_app_identifier(json!({ "identifier": "" })).is_err());
-        assert!(set_app_identifier(json!({ "identifier": "bad\0id" })).is_err());
+    fn app_identity_is_validated_cross_platform() {
+        let (app_id, _) = set_app_identity(json!({ "appId": " com.example.app " })).unwrap();
+        assert_eq!(app_id, "com.example.app");
+        assert!(set_app_identity(json!({ "appId": "" })).is_err());
+        assert!(set_app_identity(json!({ "appId": "bad\0id" })).is_err());
     }
 
     #[test]
     fn app_user_model_id_payload_accepts_both_id_spellings() {
-        let camel: SetAppUserModelIdPayload =
+        let camel: SetAppIdentityPayload =
             serde_json::from_str(r#"{"appId":"com.example.app","name":"Example App"}"#).unwrap();
-        let win32: SetAppUserModelIdPayload =
+        let win32: SetAppIdentityPayload =
             serde_json::from_str(r#"{"appID":"com.example.app"}"#).unwrap();
 
         assert_eq!(camel.app_id, "com.example.app");
