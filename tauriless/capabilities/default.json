@@ -175,7 +175,7 @@
     "opener:default",
     {
       "identifier": "opener:allow-open-path",
-      "allow": [{ "path": "**/*" }]
+      "allow": [{ "path": "/**" }, { "path": "**/*" }]
     },
     "os:default",
     "os:allow-hostname",
