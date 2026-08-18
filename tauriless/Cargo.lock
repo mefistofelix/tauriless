@@ -3699,7 +3699,7 @@ dependencies = [
 
 [[package]]
 name = "tauriless"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "mime_guess",
  "serde",

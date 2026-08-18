@@ -173,7 +173,10 @@
     "core:window:allow-unminimize",
     "notification:default",
     "opener:default",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "**/*" }]
+    },
     "os:default",
     "os:allow-hostname",
     "positioner:default",
