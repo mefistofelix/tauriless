@@ -15,7 +15,7 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 mime_guess = "2.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tauri = { version = "=2.11.5", default-features = false, features = ["wry", "tray-icon", "webview-data-url", "custom-protocol"] }
+tauri = { git = "https://github.com/mefistofelix/tauri.git", branch = "dev", default-features = false, features = ["wry", "tray-icon", "webview-data-url", "custom-protocol"] }
 tauri-plugin-notification = "=2.3.3"
 tauri-plugin-opener = "=2.5.4"
 tauri-plugin-os = "=2.3.2"
@@ -31,9 +31,9 @@ windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Storage_E
 tauri-build = { version = "=2.6.3", features = [] }
 
 [patch.crates-io]
-tao = { path = "../vendor/tao" }
-tauri = { path = "../vendor/tauri/crates/tauri" }
-tauri-runtime-wry = { path = "../vendor/tauri/crates/tauri-runtime-wry" }
+tao = { git = "https://github.com/mefistofelix/tao.git", branch = "dev" }
+tauri = { git = "https://github.com/mefistofelix/tauri.git", branch = "dev" }
+tauri-runtime-wry = { git = "https://github.com/mefistofelix/tauri.git", branch = "dev" }
 
 [profile.release]
 opt-level = "z"

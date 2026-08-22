@@ -11,8 +11,9 @@ experimental `node:ffi` module.
 
 ## Design constraints
 
-- Reuse the published Tauri crates and their public APIs. Prefer adding code in
-  this repository over patching or forking Tauri.
+- Reuse Tauri public APIs for bridge behavior. The bounded event-loop extension is
+  maintained in the `mefistofelix/tauri` and `mefistofelix/tao` forks instead of
+  being reimplemented in Tauriless.
 - `tauriless_create` creates only the bridge state. Build `tauri::App` lazily on
   the first `plugin:webview|create_webview_window` request. Before that build,
   `tauriless_run` only flushes bridge-owned outbox messages; after the build it
@@ -105,9 +106,12 @@ experimental `node:ffi` module.
 - Build Tauri with `custom-protocol` enabled. Tauriless has no dev-server mode,
   so release/runtime plugin behavior (notably macOS notification application
   identity) must never be misclassified by Tauri as development mode.
-- Pin Tauri 2.11.5 and Tao 0.35.3. Keep the complete upstream Tauri and Tao source
-  trees under `vendor/tauri` and `vendor/tao`, with the bounded `run_for` patch
-  applied directly there and tracked by Git. Do not fork or patch WRY.
+- Track the `dev` branches of `mefistofelix/tauri` and `mefistofelix/tao`. The
+  Tauri fork itself depends on the Tao fork so the patched `run_for` contract is
+  self-contained. Tauriless consumes those forks through Cargo git dependencies;
+  `Cargo.lock` pins the resolved commits for reproducible builds. Do not vendor
+  Tauri/Tao source trees or keep duplicate local patch files. WRY remains upstream
+  and unpatched.
 - Keep the default application icon based on the official `create-tauri-app`
   scaffold assets. `tauriless/icons/icon.png` must remain a real RGBA PNG (PNG
   color type 6), not indexed/grayscale; `build.rs` deliberately asserts this so

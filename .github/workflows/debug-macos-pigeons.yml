@@ -1,9 +1,6 @@
 name: macOS Pigeons Debug
 
 on:
-  push:
-    branches:
-      - vendor-tauri-run-for
   workflow_dispatch:
     inputs:
       ssh_public_key:
@@ -25,12 +22,19 @@ jobs:
       - name: Check out Tauriless
         uses: actions/checkout@v7
 
-      - name: Check out Tauri 2.11.5
+      - name: Check out patched Tauri dev
         uses: actions/checkout@v7
         with:
-          repository: tauri-apps/tauri
-          ref: tauri-v2.11.5
+          repository: mefistofelix/tauri
+          ref: dev
           path: tauri-src
+
+      - name: Check out patched Tao dev
+        uses: actions/checkout@v7
+        with:
+          repository: mefistofelix/tao
+          ref: dev
+          path: tao-src
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -41,7 +45,7 @@ jobs:
           deno-version: v2.9.5
 
       - name: Probe repeated bounded native runs
-        run: cargo run --manifest-path vendor/tao/Cargo.toml --example run_for_probe -q
+        run: cargo run --manifest-path tao-src/Cargo.toml --example run_for_probe -q
 
       - name: Check Tauriless
         run: cargo check --manifest-path tauriless/Cargo.toml --locked

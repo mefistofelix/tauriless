@@ -207,8 +207,8 @@ directory is intentionally unchanged and never uses the shortcut `name`.
 If `dataDirectory` is supplied, it takes precedence and retains the upstream
 Tauri relative-LocalData behavior; absolute paths and `..` components are
 rejected. Tauriless reapplies that resolved directory explicitly through
-`WebviewWindowBuilder::data_directory`, working around Tauri 2.11.5 dropping
-`WindowConfig.data_directory` during conversion to runtime webview attributes.
+`WebviewWindowBuilder::data_directory`, working around the current Tauri conversion
+dropping `WindowConfig.data_directory` from runtime webview attributes.
 The same interception is applied to every `plugin:webview|create_webview_window`
 request, not only the first. `plugin:app|identifier` and
 `plugin:notification|notify` remain ordinary upstream Tauri commands and require
@@ -227,7 +227,7 @@ Tauriless registers Tauri's public asynchronous URI protocol hook under the
 standard `tauri` scheme. This replaces only the compile-time asset resolver: a
 page still has Tauri's normal local origin (`tauri://localhost` on macOS/Linux,
 `http://tauri.localhost` on Windows), standard IPC initialization, and ACL.
-The complete pinned Tauri and Tao source trees live under `vendor/`; the bounded `run_for` delta is applied there and tracked in `patches/`. WRY itself is not patched.
+The bounded event-loop delta lives in the `dev` branches of the `mefistofelix/tauri` and `mefistofelix/tao` forks. Tauriless consumes those forks through Cargo git dependencies and `Cargo.lock` pins the exact resolved commits. No Tauri/Tao source trees are vendored here, and WRY remains unpatched.
 
 When a webview requests `index.html`, CSS, JavaScript, an image, or another
 local asset, `run()` returns:
@@ -844,5 +844,6 @@ embedding environment.
 
 The bridge uses Tauri's public `Webview::on_message`/`InvokeRequest` path to
 avoid recreating its IPC and resource machinery. Tauri documents this surface as
-not yet stable, so the workspace pins the unmodified crates.io Tauri 2.11.5
-release; upgrades must be explicit and the end-to-end demo must be retested.
+not yet stable, so upgrades are taken from the maintained fork `dev` branches and
+become reproducible through the resolved git commits in `Cargo.lock`. Syncing either
+fork requires rerunning the end-to-end demo and native regression tests.

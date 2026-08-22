@@ -37,33 +37,22 @@ host main thread
 
 No background GUI thread.
 
-## Investigate a minimal Tauri patch
+## Current solution
 
-The current project rule says to use unmodified crates.io Tauri. For this investigation, explicitly evaluate whether a **small, maintainable Tauri patch** is the correct macOS solution. Do not silently make it permanent; compare the result and then decide whether to relax the project rule.
+The bounded event-loop approach is now the maintained design:
 
-Focus on the smallest patch around `tauri-runtime-wry` / Tao event-loop pumping, not on WebView, asset protocol, IPC, or Tauriless APIs.
+1. `mefistofelix/tao` tracks upstream `dev` and carries the cross-platform
+   `EventLoop::run_for` implementation plus its probe.
+2. `mefistofelix/tauri` tracks upstream `dev`, exposes bounded `run_for` through
+   `tauri-runtime-wry` and `App<Wry>`, and depends directly on the Tao fork `dev`.
+3. Tauriless consumes the fork `dev` branches through Cargo git dependencies;
+   `Cargo.lock` records the exact commits used by each build.
+4. WRY remains upstream and unpatched. No Tauri/Tao source trees or duplicate
+   patch files live in the Tauriless repository.
 
-Candidate direction:
-
-1. Start from Tauri 2.11.5 / `tauri-runtime-wry` 2.11.4 / Tao 0.35.3 used by Tauriless.
-2. Inspect `Wry::run_iteration()` and the macOS Tao `run_return()` path.
-3. Add the minimum API/behavior needed for something equivalent to:
-
-   ```rust
-   app.run_for(Duration::from_millis(16), callback)
-   ```
-
-4. The timed slice must run the real AppKit/Tao loop long enough for WKWebView tasks, timers, navigation and custom-protocol callbacks to execute, then return without destroying the application/runtime state.
-5. Avoid changing normal `App::run()` semantics.
-6. Prefer a tiny runtime-level patch over changes spread across Tauri, Wry and Tauriless.
-
-Things to verify while patching:
-
-- Tauri's current `run_iteration()` sets `ControlFlow::Exit` around `MainEventsCleared`.
-- `handle_event_loop` and subsequent Tao events can overwrite `ControlFlow`, so a simple external `wry_plugin` that sets `WaitUntil` may not be sufficient.
-- determine exactly when Tao/macOS calls `NSApplication.run`, `stop:`, posts its dummy event, and clears the event-loop callback during `run_return()`.
-- determine whether a timed `ControlFlow::WaitUntil` is sufficient once applied at the correct level, or whether macOS needs a small dedicated `NSApplication` / CFRunLoop slice.
-- verify repeated timed calls do not emit `LoopDestroyed`, tear down callback state, or otherwise make the next call semantically a new event loop.
+When syncing either fork with upstream, rebase/merge upstream `dev`, preserve the
+bounded-run changes on that same `dev` branch, refresh Tauriless' lock file, and
+rerun the native/WebView regression suite.
 
 ## Required A/B tests
 
@@ -134,13 +123,12 @@ Security requirements:
 - do not expose repository or GitHub tokens through the tunnel;
 - kill the debug job immediately after testing.
 
-## Deliverable
+## Remaining maintenance
 
-Once a working variant is found:
-
-1. reduce the Tauri change to the smallest possible patch;
-2. save that patch in the Tauriless repository in a clear, reproducible form;
-3. make Tauriless' macOS build use the patched Tauri source while other platforms stay unchanged if possible;
-4. add an automated macOS Apple Silicon regression test that proves a real WebView page reaches bootstrap;
-5. document why the patch is required and link the upstream Tauri issue;
-6. decide whether to upstream the fix to Tauri/Tao and eventually return to an unmodified crates.io dependency.
+- Keep both forks synchronized with their upstream `dev` branches.
+- Keep the Tauri fork pointed at the Tao fork `dev` so the pair cannot drift.
+- Refresh `Cargo.lock` after fork updates and verify the resolved git SHAs.
+- Keep the Apple Silicon WebView/bootstrap regression test green; add Intel
+  coverage after the fast path remains stable.
+- Upstream the bounded-run API when practical; until then the forks are the
+  authoritative source of the delta.

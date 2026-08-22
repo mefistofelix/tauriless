@@ -14,13 +14,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+      - name: Check out patched Tao dev
+        uses: actions/checkout@v7
+        with:
+          repository: mefistofelix/tao
+          ref: dev
+          path: tao-src
       - uses: dtolnay/rust-toolchain@stable
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.9.5
 
       - name: Probe repeated bounded native runs
-        run: cargo run --manifest-path vendor/tao/Cargo.toml --example run_for_probe -q
+        run: cargo run --manifest-path tao-src/Cargo.toml --example run_for_probe -q
 
       - name: Check Tauriless
         run: cargo check --manifest-path tauriless/Cargo.toml --locked
