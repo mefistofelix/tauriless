@@ -73,7 +73,9 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
+      - name: Build native release
+        shell: cmd
+        run: call build-windows.bat release
       - name: Upload Windows binary to release
         shell: pwsh
         env:
@@ -105,7 +107,8 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
+      - name: Build native release
+        run: ./build-macos.sh release
       - name: Upload macOS binary to release
         shell: bash
         env:
@@ -138,7 +141,8 @@ jobs:
             libssl-dev \
             libwebkit2gtk-4.1-dev \
             libxdo-dev
-      - run: cargo build --manifest-path tauriless/Cargo.toml --release --locked
+      - name: Build native release
+        run: ./build-linux.sh release
       - name: Upload Linux binary to release
         shell: bash
         env:

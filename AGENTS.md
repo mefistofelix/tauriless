@@ -148,27 +148,46 @@ experimental `node:ffi` module.
   unrelated platforms.
 - Never commit generated native binaries or npm tarballs. The release workflow
   stages them under `npm/native` and publishes the resulting package.
+- The npm publish workflow must assemble from the exact release tag, download all
+  four native release assets, smoke the current `npm/index.js` against the staged
+  Linux binary before publication, and verify that the packed tarball contains
+  `index.js`, `index.d.ts`, and every native binary. Keep the public JavaScript
+  method `run(timeoutMs)` and C ABI `tauriless_run`; the internal upstream
+  `run_timeout` rename is not a public npm API rename.
 
-## Toolchain
+## Toolchain and native build entry points
 
-The workspace root carries `rustup-init.exe` and `msvcup.exe`; the Rust/Tauri
-crate lives in `tauriless/`. Install the requested Windows toolchain from the
-workspace root with:
+The Rust/Tauri crate lives in `tauriless/`. Keep exactly one native build entry
+point per desktop OS at the repository root:
 
-```powershell
-.\msvcup.exe install msvc msvc-14.44.17.14 sdk-10.0.22621.7 --manifest-update-always
-```
+- `build-windows.bat [debug|release]`
+- `build-macos.sh [debug|release]`
+- `build-linux.sh [debug|release]`
+
+GitHub native jobs must invoke these same scripts instead of duplicating the
+Cargo build command in workflow YAML. Each script builds the locked
+`tauriless/Cargo.toml`; the only platform-specific behavior belongs in its own
+script or in prerequisite setup before the script runs.
+
+On Windows, `build-windows.bat` must prefer, in order: an already-active x64
+MSVC environment, an existing project-local `msvc/vcvars64.bat`, a
+`vcvars64.bat` exposed on `PATH`, a Visual Studio installation discoverable
+through `vswhere`, and finally a portable `msvcup` bootstrap into `msvc/`. The
+last-resort bootstrap may download `msvcup.exe` when missing, but it must only
+run when no usable MSVC toolchain is already available.
+Linux package installation stays outside `build-linux.sh`; do not put `sudo`
+package-management operations in a build script.
 
 Use the Rust stable toolchain unless a pinned `rust-toolchain.toml` is added.
 
 ## Verification
 
-Run these from the `tauriless` project directory after changes:
+Run these from the Tauriless repository root after changes:
 
-```powershell
-cargo fmt --all -- --check
-cargo check
-cargo test
+```text
+cargo fmt --manifest-path tauriless/Cargo.toml --all -- --check
+<platform build script>
+cargo test --manifest-path tauriless/Cargo.toml --locked
 ```
 
 Keep the protocol examples and `tauriless/include/tauriless.h` synchronized with

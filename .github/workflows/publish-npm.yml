@@ -29,6 +29,10 @@ jobs:
           node-version: "26"
           package-manager-cache: false
 
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.5
+
       - name: Download release binaries
         shell: bash
         env:
@@ -58,10 +62,64 @@ jobs:
           install -Dm755 ".downloads/tauriless-v${version}-linux-x64.so" \
             npm/native/linux-x64/libtauriless.so
           npm pkg set version="$version" --prefix npm
+          npm_version=$(node -p "require('./npm/package.json').version")
+          if [[ "$version" != "$npm_version" ]]; then
+            echo "npm version $npm_version does not match release $version" >&2
+            exit 1
+          fi
 
-      - name: Pack npm tarball
+      - name: Install Linux runtime dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev
+
+      - name: Smoke assembled npm adapter with release binary
+        shell: bash
+        env:
+          TAURILESS_LIBRARY_PATH: ${{ github.workspace }}/npm/native/linux-x64/libtauriless.so
+        run: |
+          ldd "$TAURILESS_LIBRARY_PATH" | tee .downloads/linux-ldd.txt
+          if grep -Fq 'not found' .downloads/linux-ldd.txt; then
+            echo 'The staged Linux release binary has unresolved shared libraries' >&2
+            exit 1
+          fi
+          deno eval '
+            import { Tauriless } from "./npm/index.js";
+            const runtime = new Tauriless();
+            const batch = runtime.run(0);
+            if (!batch || !Array.isArray(batch.messages)) {
+              throw new Error(`invalid Tauriless batch: ${JSON.stringify(batch)}`);
+            }
+            runtime.close();
+            console.log("assembled npm adapter smoke OK");
+          '
+
+      - name: Pack and verify npm tarball
         working-directory: npm
-        run: npm pack
+        shell: bash
+        run: |
+          npm pack
+          package=$(ls -1 *.tgz)
+          contents=$(tar -tzf "$package")
+          for required in \
+            package/index.js \
+            package/index.d.ts \
+            package/native/win32-x64/tauriless.dll \
+            package/native/darwin-x64/libtauriless.dylib \
+            package/native/darwin-arm64/libtauriless.dylib \
+            package/native/linux-x64/libtauriless.so
+          do
+            if ! grep -Fxq "$required" <<<"$contents"; then
+              echo "Missing $required from $package" >&2
+              exit 1
+            fi
+          done
 
       - name: Publish to npm
         working-directory: npm

@@ -61,22 +61,55 @@ Every operation on an instance, including destruction, must happen on the OS
 thread that called `tauriless_create`; for GUI hosts this must be the main
 thread.
 
-## Build on Windows
+## Native builds
 
-The toolchain executables and this README live in the workspace root; the crate
-lives in `tauriless/`. Install the requested toolchain from the workspace root:
+Local builds and GitHub native jobs use the same platform entry points from the
+repository root:
 
-```powershell
-.\msvcup.exe install msvc msvc-14.44.17.14 sdk-10.0.22621.7 --manifest-update-always
+```text
+build-windows.bat [debug|release]
+build-macos.sh    [debug|release]
+build-linux.sh    [debug|release]
 ```
 
-Build the crate from the workspace root inside the MSVC environment:
+The default is `debug`; pass `release` for a release build. All three scripts
+build `tauriless/Cargo.toml` with `--locked`, so local and GitHub builds use the
+same Cargo dependency closure.
+
+On Windows, `build-windows.bat` first reuses an already-active x64 MSVC
+environment. If none is active it reuses a project-local `msvc\vcvars64.bat`,
+then a `vcvars64.bat` already exposed on `PATH`, then the Visual Studio
+installation discoverable by `vswhere`. Only when none of those exists does it
+bootstrap the portable `msvcup` toolchain into `msvc/` and call its
+`vcvars64.bat`. That makes the same script suitable for a configured developer
+shell, a GitHub Windows runner, and a clean local machine without forcing an
+unnecessary MSVC download.
+
+Then build with:
 
 ```powershell
-cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
+.\build-windows.bat
+.\build-windows.bat release
 ```
 
-The debug DLL and import library are written to `tauriless/target/debug`. The C
+On macOS and Linux, install the normal native Tauri prerequisites once and run:
+
+```console
+./build-macos.sh
+./build-macos.sh release
+```
+
+or:
+
+```console
+./build-linux.sh
+./build-linux.sh release
+```
+
+The Linux GitHub job installs its GTK/WebKit/system packages before invoking
+`build-linux.sh`; the build script itself never performs privileged package
+installation. The debug DLL/import library on Windows are written to
+`tauriless/target/debug`. The C
 header is [`tauriless/include/tauriless.h`](tauriless/include/tauriless.h), and
 [`examples/smoke.c`](examples/smoke.c) is a complete native host. Tauriless uses
 the standard icon assets from the official `create-tauri-app` scaffold instead
@@ -450,7 +483,7 @@ From the workspace root, build the DLL, copy the supplied Deno executable beside
 the debug DLL, and run the demo:
 
 ```powershell
-cmd /d /s /c "call msvc\vcvars-x64.bat >nul && cargo build --manifest-path tauriless\Cargo.toml"
+.\build-windows.bat
 Copy-Item -LiteralPath .\deno.exe -Destination .\tauriless\target\debug\deno.exe -Force
 .\tauriless\target\debug\deno.exe run --allow-ffi --allow-write .\examples\deno_ffi_demo.js
 ```
@@ -482,7 +515,12 @@ command or Tauri patch is introduced.
 
 The single `npm/index.js` adapter selects Node `node:ffi`, Deno FFI, or
 `bun:ffi`; it contains no native addon. It is published publicly on the main npm
-registry as `@mefistofelix/tauriless` through Trusted Publishing. A release
+registry as `@mefistofelix/tauriless` through Trusted Publishing. The npm
+workflow checks out the exact release tag, downloads the four binaries produced
+by the native release jobs, stages them under `npm/native`, updates the npm
+version from the tag, runs the current `npm/index.js` against the staged Linux
+release binary with Deno, then verifies the packed tarball contains the adapter,
+type declarations, and every native binary before publishing it. A release
 contains these precompiled dynamic libraries in one tarball:
 
 - `native/win32-x64/tauriless.dll`
