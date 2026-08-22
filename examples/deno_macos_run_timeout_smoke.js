@@ -1,4 +1,4 @@
-const LABEL = "macos-run-for-smoke";
+const LABEL = "macos-run-timeout-smoke";
 const encoder = new TextEncoder();
 const dylib = Deno.dlopen(
   new URL("../tauriless/target/debug/libtauriless.dylib", import.meta.url),
@@ -61,8 +61,8 @@ try {
   const created = result(send("plugin:webview|create_webview_window", {
     options: {
       label: LABEL,
-      title: "run_for smoke before",
-      url: "data:text/html,<title>Tauriless run_for smoke</title><body>WKWebView smoke</body>",
+      title: "run_timeout smoke before",
+      url: "data:text/html,<title>Tauriless run_timeout smoke</title><body>WKWebView smoke</body>",
       width: 480,
       height: 320,
       visible: true,
@@ -75,22 +75,22 @@ try {
     const started = performance.now();
     run(40);
     const elapsed = performance.now() - started;
-    if (elapsed > 1000) throw new Error(`run_for slice ${i} took ${elapsed.toFixed(1)} ms`);
+    if (elapsed > 1000) throw new Error(`run_timeout slice ${i} took ${elapsed.toFixed(1)} ms`);
     samples.push(elapsed);
   }
 
   const visible = result(send("plugin:window|is_visible", { label: LABEL }, LABEL));
   if (visible !== true) throw new Error(`window is not visible: ${JSON.stringify(visible)}`);
 
-  result(send("plugin:window|set_title", { label: LABEL, value: "run_for smoke after" }, LABEL));
+  result(send("plugin:window|set_title", { label: LABEL, value: "run_timeout smoke after" }, LABEL));
   for (let i = 0; i < 8; i++) run(16);
   const title = result(send("plugin:window|title", { label: LABEL }, LABEL));
-  if (title !== "run_for smoke after") throw new Error(`unexpected title: ${JSON.stringify(title)}`);
+  if (title !== "run_timeout smoke after") throw new Error(`unexpected title: ${JSON.stringify(title)}`);
 
   result(send("plugin:window|close", { label: LABEL }, LABEL));
   for (let i = 0; i < 4; i++) run(16);
 
-  console.log(`macOS Tauriless run_for smoke OK: ${samples.map((x) => x.toFixed(1)).join(", ")} ms`);
+  console.log(`macOS Tauriless run_timeout smoke OK: ${samples.map((x) => x.toFixed(1)).join(", ")} ms`);
 } finally {
   const status = dylib.symbols.tauriless_destroy(runtime);
   dylib.close();

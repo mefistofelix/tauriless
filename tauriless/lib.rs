@@ -237,7 +237,7 @@ impl Tauriless {
 
         if let Some(app) = self.app.as_mut() {
             let outbox = Arc::clone(&self.outbox);
-            app.run_for(timeout, move |_app, event| collect_event(&outbox, event));
+            app.run_timeout(timeout, move |_app, event| collect_event(&outbox, event));
         }
 
         let messages = std::mem::take(&mut *self.outbox.lock().expect("outbox mutex poisoned"));
@@ -426,7 +426,7 @@ impl Tauriless {
 
         // Complete Tauri setup without creating a bootstrap window or webview.
         let setup_outbox = Arc::clone(&self.outbox);
-        app.run_for(Duration::ZERO, move |_app, event| {
+        app.run_timeout(Duration::ZERO, move |_app, event| {
             collect_event(&setup_outbox, event)
         });
         self.app = Some(app);

@@ -11,6 +11,23 @@ Node-API is not required. The npm package selects the built-in FFI provided by
 Node, Deno, or Bun and binds exactly the five functions in
 `tauriless/include/tauriless.h` behind one small class.
 
+## Patched Tauri/Tao stack
+
+Tauriless relies on a deliberately small fork stack to support host-controlled,
+repeated native event-loop slices. Tao owns the cross-platform
+`EventLoop::run_timeout` implementation; the Tauri fork exposes it through
+`tauri-runtime-wry` and `App<Wry>`; Tauriless maps its existing
+`tauriless_run(runtime, timeout_ms)` C ABI onto that bounded Tauri pump. WRY
+remains upstream and unpatched.
+
+The complete rationale, dependency diagram, repository responsibilities, and
+upstream-sync procedure are documented in
+[`tauriless_patch/README.md`](tauriless_patch/README.md). Matching documentation
+also lives in the `tauriless_patch/` directory of the
+[`mefistofelix/tauri`](https://github.com/mefistofelix/tauri) and
+[`mefistofelix/tao`](https://github.com/mefistofelix/tao) forks so the full patch
+stack is understandable no matter which repository is opened first.
+
 ## Architecture
 
 The exported surface is intentionally small:

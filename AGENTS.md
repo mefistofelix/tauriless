@@ -107,7 +107,7 @@ experimental `node:ffi` module.
   so release/runtime plugin behavior (notably macOS notification application
   identity) must never be misclassified by Tauri as development mode.
 - Track the `dev` branches of `mefistofelix/tauri` and `mefistofelix/tao`. The
-  Tauri fork itself depends on the Tao fork so the patched `run_for` contract is
+  Tauri fork itself depends on the Tao fork so the patched `run_timeout` contract is
   self-contained. Tauriless consumes those forks through Cargo git dependencies;
   `Cargo.lock` pins the resolved commits for reproducible builds. Do not vendor
   Tauri/Tao source trees or keep duplicate local patch files. WRY remains upstream

@@ -42,8 +42,8 @@ No background GUI thread.
 The bounded event-loop approach is now the maintained design:
 
 1. `mefistofelix/tao` tracks upstream `dev` and carries the cross-platform
-   `EventLoop::run_for` implementation plus its probe.
-2. `mefistofelix/tauri` tracks upstream `dev`, exposes bounded `run_for` through
+   `EventLoop::run_timeout` implementation plus its probe.
+2. `mefistofelix/tauri` tracks upstream `dev`, exposes bounded `run_timeout` through
    `tauri-runtime-wry` and `App<Wry>`, and depends directly on the Tao fork `dev`.
 3. Tauriless consumes the fork `dev` branches through Cargo git dependencies;
    `Cargo.lock` records the exact commits used by each build.

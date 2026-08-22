@@ -1,4 +1,4 @@
-name: macOS run_for test
+name: macOS run_timeout test
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   test:
-    name: Apple Silicon run_for
+    name: Apple Silicon run_timeout
     runs-on: macos-15
     timeout-minutes: 30
 
@@ -26,7 +26,7 @@ jobs:
           deno-version: v2.9.5
 
       - name: Probe repeated bounded native runs
-        run: cargo run --manifest-path tao-src/Cargo.toml --example run_for_probe -q
+        run: cargo run --manifest-path tao-src/Cargo.toml --example run_timeout_probe -q
 
       - name: Check Tauriless
         run: cargo check --manifest-path tauriless/Cargo.toml --locked
@@ -35,7 +35,7 @@ jobs:
         run: cargo build --manifest-path tauriless/Cargo.toml --locked
 
       - name: Smoke real Tauri webview with bounded run
-        run: deno run --allow-ffi examples/deno_macos_run_for_smoke.js
+        run: deno run --allow-ffi examples/deno_macos_run_timeout_smoke.js
 
       - name: Test Tauriless
         run: cargo test --manifest-path tauriless/Cargo.toml --locked

@@ -735,7 +735,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -936,7 +936,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1556,7 +1556,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -2895,7 +2895,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3409,7 +3409,7 @@ dependencies = [
 [[package]]
 name = "tao"
 version = "0.37.0"
-source = "git+https://github.com/mefistofelix/tao.git?branch=dev#8f7c818e81acd6924c5c18ad9a3b906510ecaf36"
+source = "git+https://github.com/mefistofelix/tao.git?branch=dev#d073951d9ee55eceee16e6088b006420b48e1fb7"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
@@ -3457,7 +3457,7 @@ dependencies = [
 [[package]]
 name = "tao-macros"
 version = "0.1.4"
-source = "git+https://github.com/mefistofelix/tao.git?branch=dev#8f7c818e81acd6924c5c18ad9a3b906510ecaf36"
+source = "git+https://github.com/mefistofelix/tao.git?branch=dev#d073951d9ee55eceee16e6088b006420b48e1fb7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -3473,7 +3473,7 @@ checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
 [[package]]
 name = "tauri"
 version = "2.11.5"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "anyhow",
  "bytes",
@@ -3545,7 +3545,7 @@ dependencies = [
 [[package]]
 name = "tauri-build"
 version = "2.6.3"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "anyhow",
  "cargo_toml 1.0.0",
@@ -3565,7 +3565,7 @@ dependencies = [
 [[package]]
 name = "tauri-codegen"
 version = "2.6.3"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "base64 0.22.1",
  "ico",
@@ -3590,7 +3590,7 @@ dependencies = [
 [[package]]
 name = "tauri-macros"
 version = "2.6.3"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -3709,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime"
 version = "2.11.3"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "cookie",
  "dpi",
@@ -3733,7 +3733,7 @@ dependencies = [
 [[package]]
 name = "tauri-runtime-wry"
 version = "2.11.4"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "gtk",
  "http",
@@ -3785,7 +3785,7 @@ dependencies = [
  "serde_with",
  "swift-rs",
  "thiserror 2.0.20",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.1.4+spec-1.1.0",
  "url",
  "urlpattern 0.3.0",
  "uuid",
@@ -3795,7 +3795,7 @@ dependencies = [
 [[package]]
 name = "tauri-utils"
 version = "2.9.3"
-source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#807fa2c81ac8dd8d7c43c2ec131532fdfec353c6"
+source = "git+https://github.com/mefistofelix/tauri.git?branch=dev#6f6636f13b927cb300a61fedd97f7d89b6651e1a"
 dependencies = [
  "anyhow",
  "cargo_metadata",
@@ -3821,7 +3821,7 @@ dependencies = [
  "serde_with",
  "swift-rs",
  "thiserror 2.0.20",
- "toml 0.9.12+spec-1.1.0",
+ "toml 1.1.4+spec-1.1.0",
  "url",
  "urlpattern 0.6.0",
  "uuid",
@@ -3879,7 +3879,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4654,7 +4654,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
