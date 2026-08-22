@@ -1,0 +1,350 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 3dadfec3ca89ee0137c9847f446a8afd803329aa..397b463c407bc7b9959569714d35433859f28762 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1316,7 +1316,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
+ dependencies = [
+  "lazy_static",
+- "windows-sys 0.48.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -1325,7 +1325,7 @@ version = "3.1.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
+ dependencies = [
+- "windows-sys 0.48.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -2493,7 +2493,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
+ dependencies = [
+  "libc",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -3828,7 +3828,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4b0f83760fb341a774ed326568e19f5a863af4a952def8c39f9ab92fd95b88e5"
+ dependencies = [
+  "equivalent",
+- "hashbrown 0.16.1",
++ "hashbrown 0.15.5",
+  "serde",
+  "serde_core",
+ ]
+@@ -5575,7 +5575,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
+ dependencies = [
+  "libc",
+- "windows-sys 0.48.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -6711,7 +6711,7 @@ dependencies = [
+  "once_cell",
+  "socket2 0.6.1",
+  "tracing",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -7391,7 +7391,7 @@ dependencies = [
+  "errno",
+  "libc",
+  "linux-raw-sys 0.4.15",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -7404,7 +7404,7 @@ dependencies = [
+  "errno",
+  "libc",
+  "linux-raw-sys 0.9.4",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -8297,7 +8297,7 @@ version = "0.8.9"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c1c97747dbf44bb1ca44a561ece23508e99cb592e862f22222dcf42f51d1e451"
+ dependencies = [
+- "heck 0.4.1",
++ "heck 0.5.0",
+  "proc-macro2",
+  "quote",
+  "syn 2.0.117",
+@@ -8761,9 +8761,8 @@ dependencies = [
+ 
+ [[package]]
+ name = "tao"
+-version = "0.36.0"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "e9fa4618f999c4249db1681cba0a19b890718f274de7fa93c445d46bd3a8a999"
++version = "0.37.0"
++source = "git+https://github.com/mefistofelix/tao.git?branch=dev#d073951d9ee55eceee16e6088b006420b48e1fb7"
+ dependencies = [
+  "bitflags 2.13.0",
+  "block2 0.6.2",
+@@ -8791,11 +8790,11 @@ dependencies = [
+  "parking_lot",
+  "percent-encoding",
+  "raw-window-handle",
+- "tao-macros",
++ "tao-macros 0.1.4 (git+https://github.com/mefistofelix/tao.git?branch=dev)",
+  "unicode-segmentation",
+  "url",
+- "windows 0.61.1",
+- "windows-core 0.61.0",
++ "windows 0.62.0",
++ "windows-core 0.62.0",
+  "windows-version",
+  "x11-dl",
+ ]
+@@ -8811,6 +8810,16 @@ dependencies = [
+  "syn 2.0.117",
+ ]
+ 
++[[package]]
++name = "tao-macros"
++version = "0.1.4"
++source = "git+https://github.com/mefistofelix/tao.git?branch=dev#d073951d9ee55eceee16e6088b006420b48e1fb7"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.117",
++]
++
+ [[package]]
+ name = "tap"
+ version = "1.0.1"
+@@ -9351,7 +9360,7 @@ dependencies = [
+  "getrandom 0.2.15",
+  "once_cell",
+  "rustix 0.38.43",
+- "windows-sys 0.59.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -10612,7 +10621,7 @@ version = "0.1.9"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "cf221c93e13a30d793f7645a0e7762c55d169dbb0a49671918a2319d289b10bb"
+ dependencies = [
+- "windows-sys 0.48.0",
++ "windows-sys 0.52.0",
+ ]
+ 
+ [[package]]
+@@ -10652,11 +10661,24 @@ version = "0.61.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c5ee8f3d025738cb02bad7868bbb5f8a6327501e870bf51f1b455b0a2454a419"
+ dependencies = [
+- "windows-collections",
++ "windows-collections 0.2.0",
+  "windows-core 0.61.0",
+- "windows-future",
++ "windows-future 0.2.0",
+  "windows-link 0.1.1",
+- "windows-numerics",
++ "windows-numerics 0.2.0",
++]
++
++[[package]]
++name = "windows"
++version = "0.62.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "9579d0e6970fd5250aa29aba5994052385ff55cf7b28a059e484bb79ea842e42"
++dependencies = [
++ "windows-collections 0.3.0",
++ "windows-core 0.62.0",
++ "windows-future 0.3.0",
++ "windows-link 0.2.1",
++ "windows-numerics 0.3.0",
+ ]
+ 
+ [[package]]
+@@ -10668,6 +10690,15 @@ dependencies = [
+  "windows-core 0.61.0",
+ ]
+ 
++[[package]]
++name = "windows-collections"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a90dd7a7b86859ec4cdf864658b311545ef19dbcf17a672b52ab7cefe80c336f"
++dependencies = [
++ "windows-core 0.62.0",
++]
++
+ [[package]]
+ name = "windows-core"
+ version = "0.52.0"
+@@ -10690,6 +10721,19 @@ dependencies = [
+  "windows-strings 0.4.0",
+ ]
+ 
++[[package]]
++name = "windows-core"
++version = "0.62.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "57fe7168f7de578d2d8a05b07fd61870d2e73b4020e9f49aa00da8471723497c"
++dependencies = [
++ "windows-implement",
++ "windows-interface",
++ "windows-link 0.2.1",
++ "windows-result 0.4.1",
++ "windows-strings 0.5.1",
++]
++
+ [[package]]
+ name = "windows-future"
+ version = "0.2.0"
+@@ -10700,6 +10744,17 @@ dependencies = [
+  "windows-link 0.1.1",
+ ]
+ 
++[[package]]
++name = "windows-future"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b2194dee901458cb79e1148a4e9aac2b164cc95fa431891e7b296ff0b2f1d8a6"
++dependencies = [
++ "windows-core 0.62.0",
++ "windows-link 0.2.1",
++ "windows-threading",
++]
++
+ [[package]]
+ name = "windows-implement"
+ version = "0.60.0"
+@@ -10744,6 +10799,16 @@ dependencies = [
+  "windows-link 0.1.1",
+ ]
+ 
++[[package]]
++name = "windows-numerics"
++version = "0.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "2ce3498fe0aba81e62e477408383196b4b0363db5e0c27646f932676283b43d8"
++dependencies = [
++ "windows-core 0.62.0",
++ "windows-link 0.2.1",
++]
++
+ [[package]]
+ name = "windows-registry"
+ version = "0.6.1"
+@@ -10907,6 +10972,15 @@ dependencies = [
+  "windows_x86_64_msvc 0.53.0",
+ ]
+ 
++[[package]]
++name = "windows-threading"
++version = "0.2.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3949bd5b99cafdf1c7ca86b43ca564028dfe27d66958f2470940f73d86d75b37"
++dependencies = [
++ "windows-link 0.2.1",
++]
++
+ [[package]]
+ name = "windows-version"
+ version = "0.1.2"
+@@ -11234,7 +11308,7 @@ dependencies = [
+  "raw-window-handle",
+  "sha2 0.10.8",
+  "soup3",
+- "tao-macros",
++ "tao-macros 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+  "thiserror 2.0.12",
+  "tracing",
+  "url",
+diff --git a/crates/tauri-runtime-wry/Cargo.toml b/crates/tauri-runtime-wry/Cargo.toml
+index 903a7a8d7c1caceaa123d1f8cda7b1ac536c7848..9508944feb7c6e6e4b5a265228906838e659644d 100644
+--- a/crates/tauri-runtime-wry/Cargo.toml
++++ b/crates/tauri-runtime-wry/Cargo.toml
+@@ -17,7 +17,7 @@ wry = { version = "0.56.0", default-features = false, features = [
+   "os-webview",
+   "linux-body",
+ ] }
+-tao = { version = "0.36.0", default-features = false, features = ["rwh_06"] }
++tao = { git = "https://github.com/mefistofelix/tao.git", branch = "dev", default-features = false, features = ["rwh_06"] }
+ tauri-runtime = { workspace = true }
+ tauri-utils = { workspace = true }
+ raw-window-handle = "0.6"
+diff --git a/crates/tauri-runtime-wry/src/lib.rs b/crates/tauri-runtime-wry/src/lib.rs
+index d14f6570ded625c24469309abdc3e4d1d7e3008d..15a51e8bb05735f91c64d8ca13543b118cddd9bd 100644
+--- a/crates/tauri-runtime-wry/src/lib.rs
++++ b/crates/tauri-runtime-wry/src/lib.rs
+@@ -138,6 +138,7 @@ use std::{
+     Arc, Mutex, Weak,
+   },
+   thread::{current as current_thread, ThreadId},
++  time::Duration,
+ };
+ 
+ pub type WebviewId = u32;
+@@ -2901,6 +2902,16 @@ impl<T: UserEvent> Wry<T> {
+       event_loop,
+     })
+   }
++
++  #[cfg(desktop)]
++  pub fn run_timeout<F: FnMut(RunEvent<T>) + 'static>(
++    &mut self,
++    timeout: Duration,
++    callback: F,
++  ) -> i32 {
++    let event_handler = make_event_handler(self.context.clone(), callback);
++    self.event_loop.run_timeout(timeout, event_handler)
++  }
+ }
+ 
+ impl<T: UserEvent> Runtime<T> for Wry<T> {
+diff --git a/crates/tauri/src/app.rs b/crates/tauri/src/app.rs
+index ea93715344c0107ec1a0ea8e00d259170f033667..7e0a9e7ba1c283cd28633ea94acb4ffaaf599bdb 100644
+--- a/crates/tauri/src/app.rs
++++ b/crates/tauri/src/app.rs
+@@ -1483,6 +1483,32 @@ impl<R: Runtime> App<R> {
+   }
+ }
+ 
++#[cfg(all(desktop, feature = "wry"))]
++impl App<crate::Wry> {
++  /// Runs the native event loop until it becomes idle, waiting at most `timeout` for work.
++  pub fn run_timeout<F: FnMut(&AppHandle<crate::Wry>, RunEvent) + 'static>(
++    &mut self,
++    timeout: Duration,
++    mut callback: F,
++  ) -> i32 {
++    let manager = self.manager.clone();
++    let app_handle = self.handle().clone();
++
++    if !self.ran_setup {
++      if let Err(e) = setup(self) {
++        panic!("Failed to setup app: {e}");
++      }
++    }
++
++    app_handle.event_loop.lock().unwrap().main_thread_id = std::thread::current().id();
++
++    self.runtime.as_mut().unwrap().run_timeout(timeout, move |event| {
++      let event = on_event_loop_event(&app_handle, event, &manager);
++      callback(&app_handle, event);
++    })
++  }
++}
++
+ /// Builds a Tauri application.
+ ///
+ /// # Examples
